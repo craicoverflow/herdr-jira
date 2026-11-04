@@ -2,9 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 )
+
+var (
+	errNoSite   = errors.New("No Jira Cloud site is available to this account.")
+	errNotCloud = errors.New("This site is not Jira Cloud.")
+)
+
+// errMultipleSites is returned for an account with several Atlassian sites,
+// which is not supported yet.
+type errMultipleSites struct{ names []string }
+
+func (e errMultipleSites) Error() string {
+	return fmt.Sprintf("This account has access to several Jira sites (%s). Only one is supported.", strings.Join(e.names, ", "))
+}
 
 // accessibleResource is one entry from getAccessibleAtlassianResources,
 // shape confirmed live in the Task 0a/0c spikes.
@@ -25,9 +41,10 @@ type userInfo struct {
 }
 
 // resolveCloudID calls getAccessibleAtlassianResources and returns the
-// first accessible site's cloudId and URL. A site can appear more than
-// once (once per scope bundle, seen in the spike); any entry's id/url pair
-// is equally valid since this account only has one site.
+// single accessible site's cloudId and URL. A site can appear more than
+// once (once per scope bundle, seen in the spike), so the list is
+// de-duplicated by id first. Zero sites, several sites and a non-Cloud URL
+// each get their own error.
 func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL string, err error) {
 	raw, err := callTool(ctx, client, "getAccessibleAtlassianResources", map[string]any{})
 	if err != nil {
@@ -37,10 +54,33 @@ func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL strin
 	if err := decodeToolResultText(raw, &resources); err != nil {
 		return "", "", err
 	}
-	if len(resources) == 0 {
-		return "", "", fmt.Errorf("no accessible Atlassian resources for this account")
+	var sites []accessibleResource
+	seen := map[string]bool{}
+	for _, r := range resources {
+		if !seen[r.ID] {
+			seen[r.ID] = true
+			sites = append(sites, r)
+		}
 	}
-	return resources[0].ID, resources[0].URL, nil
+	switch len(sites) {
+	case 0:
+		return "", "", errNoSite
+	case 1:
+	default:
+		names := make([]string, len(sites))
+		for i, s := range sites {
+			names[i] = s.Name
+			if names[i] == "" {
+				names[i] = s.URL
+			}
+		}
+		return "", "", errMultipleSites{names: names}
+	}
+	u, err := url.Parse(sites[0].URL)
+	if err != nil || !strings.HasSuffix(u.Hostname(), ".atlassian.net") {
+		return "", "", errNotCloud
+	}
+	return sites[0].ID, sites[0].URL, nil
 }
 
 func fetchUserInfo(ctx context.Context, client *http.Client) (userInfo, error) {
@@ -130,5 +170,11 @@ func status(ctx context.Context) error {
 	fmt.Println()
 	fmt.Println("Site:", siteURL)
 	fmt.Println("Cloud ID:", cloudID)
+	cfg, _ := loadConfig()
+	if cfg.KeyPattern != "" {
+		fmt.Println("Branch key pattern:", cfg.KeyPattern, "(from config)")
+	} else {
+		fmt.Println("Branch key pattern: auto (confirmed with Jira)")
+	}
 	return nil
 }

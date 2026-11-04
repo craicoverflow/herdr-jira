@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -278,5 +282,99 @@ func TestValidAccessTokenConcurrentCallsAllSucceed(t *testing.T) {
 	}
 	if creds.AccessToken != "new-token" || creds.RefreshToken != "refresh-2" {
 		t.Errorf("final credentials = %+v, want AccessToken=new-token RefreshToken=refresh-2", creds)
+	}
+}
+
+func TestRefreshAndSaveKeepsCloudIDSiteAndAccount(t *testing.T) {
+	withTempConfigDir(t)
+	if err := saveCredentials(credentials{
+		ClientID: "cid-1", RefreshToken: "rt", ExpiresAt: time.Now().Add(-time.Minute),
+		CloudID: "cloud-1", SiteURL: "https://example.atlassian.net", AccountID: "acct-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"access_token":"new","refresh_token":"rt2","expires_in":3600}`)
+	}))
+	defer srv.Close()
+	orig := tokenEndpoint
+	tokenEndpoint = srv.URL
+	defer func() { tokenEndpoint = orig }()
+
+	if _, err := refreshAndSave(context.Background(), srv.Client()); err != nil {
+		t.Fatalf("refreshAndSave: %v", err)
+	}
+	got, err := loadCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccessToken != "new" || got.CloudID != "cloud-1" || got.SiteURL != "https://example.atlassian.net" || got.AccountID != "acct-1" {
+		t.Errorf("creds after refresh = %+v, want new token and the site/account kept", got)
+	}
+}
+
+func TestCallToolMapsMissingToolFromStage0Fixture(t *testing.T) {
+	withSignedInCredentials(t)
+	data, err := os.ReadFile("testdata/stage0/unknown_tool.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil { // SSE data must be one line
+		t.Fatal(err)
+	}
+	data = compact.Bytes()
+	srv := newFakeMCPServer(t, map[string]string{})
+	defer srv.Close()
+	// Serve the recorded isError result for noSuchTool.
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if req.Method == "initialize" {
+			fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+			return
+		}
+		fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":%s}\n\n", data)
+	})
+	orig := mcpEndpoint
+	mcpEndpoint = srv.URL
+	defer func() { mcpEndpoint = orig }()
+
+	_, err = callTool(context.Background(), srv.Client(), "noSuchTool", map[string]any{})
+	if !errors.Is(err, errToolMissing) {
+		t.Fatalf("err = %v, want errToolMissing", err)
+	}
+	if !strings.Contains(err.Error(), "noSuchTool") {
+		t.Errorf("err = %q, want the tool name in it", err)
+	}
+}
+
+func TestToolMissingErrorIgnoresOtherFailures(t *testing.T) {
+	other := json.RawMessage(`{"content":[{"type":"text","text":"Issue does not exist"}],"isError":true}`)
+	if toolMissingError("getJiraIssue", other, nil) != nil {
+		t.Error("an ordinary tool failure must not be reported as a missing tool")
+	}
+	if toolMissingError("getJiraIssue", nil, &mcpRPCError{Code: -32000, Message: "boom"}) != nil {
+		t.Error("an unrelated RPC error must not be reported as a missing tool")
+	}
+	if toolMissingError("x", nil, fmt.Errorf("wrapped: %w", &mcpRPCError{Code: -32601, Message: "Method not found"})) == nil {
+		t.Error("a -32601 RPC error should be a missing tool")
+	}
+}
+
+func TestPluginVersionMatchesManifest(t *testing.T) {
+	data, err := os.ReadFile("herdr-plugin.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^version\s*=\s*"([^"]+)"`).FindSubmatch(data)
+	if m == nil || string(m[1]) != pluginVersion {
+		t.Errorf("herdr-plugin.toml version = %q, pluginVersion = %q", m, pluginVersion)
+	}
+	if !strings.Contains(userAgent, "herdr-jira/"+pluginVersion) {
+		t.Errorf("userAgent = %q, want it to carry pluginVersion", userAgent)
 	}
 }

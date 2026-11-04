@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -97,8 +98,8 @@ func TestWaitForCallbackCapturesProviderError(t *testing.T) {
 	resp.Body.Close()
 
 	err = <-errCh
-	if err == nil {
-		t.Fatal("waitForCallback: expected an error, got nil")
+	if !errors.Is(err, errConsentBlocked) {
+		t.Fatalf("waitForCallback err = %v, want errConsentBlocked for access_denied", err)
 	}
 }
 

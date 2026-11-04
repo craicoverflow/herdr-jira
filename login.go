@@ -62,6 +62,11 @@ func signIn(ctx context.Context) error {
 	if err := saveCredentials(tokenResponseToCredentials(clientID, tok)); err != nil {
 		return fmt.Errorf("sign in: store credentials: %w", err)
 	}
+	// Resolve the site now, so a no-site or multi-site account sees the
+	// reason at sign-in rather than on the first list load.
+	if _, err := ensureCloudID(ctx, client); err != nil {
+		return fmt.Errorf("sign in: %w", err)
+	}
 	fmt.Println("Signed in.")
 	return nil
 }

@@ -25,7 +25,7 @@ const (
 	// that blocks default Go/Python HTTP client User-Agents with a 403
 	// (confirmed in the Task 0a spike). Every request to the endpoint must
 	// set a browser-like UA.
-	userAgent = "Mozilla/5.0 (compatible; herdr-jira/0.1; +https://github.com/craicoverflow/herdr-jira)"
+	userAgent = "Mozilla/5.0 (compatible; herdr-jira/" + pluginVersion + "; +https://github.com/craicoverflow/herdr-jira)"
 )
 
 // tokenEndpoint and mcpEndpoint are vars, not consts, so tests can point
@@ -94,6 +94,12 @@ func registerClientAt(ctx context.Context, client *http.Client, endpoint, redire
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode == http.StatusForbidden && !strings.Contains(string(data), "error code:") {
+		// A bare 403 is the server refusing this client. A Cloudflare WAF
+		// block ("error code: 1010") is a different failure and keeps its
+		// body in the generic error below.
+		return "", fmt.Errorf("register client: %w", errConsentBlocked)
+	}
 	if resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("register client: %s: %s", resp.Status, string(data))
 	}

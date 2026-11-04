@@ -21,15 +21,56 @@ var mcpEndpoint = oauthIssuer + "/v1/mcp"
 // sign in again.
 var errSignedOut = errors.New("not signed in: open the Jira popup to sign in")
 
+// errConsentBlocked means the Atlassian side refused the sign-in itself
+// (an organisation blocking third-party MCP clients), as opposed to the
+// user being signed out.
+var errConsentBlocked = errors.New("Sign-in was refused. Your organisation may block third-party MCP clients; ask your Jira admin.")
+
+// errToolMissing means a tool this plugin calls is not offered by the
+// Atlassian MCP server. It is wrapped with %w to carry the tool name.
+var errToolMissing = errors.New("the Atlassian MCP server may have changed")
+
+// pluginVersion is the plugin's version, used in the User-Agent and the MCP
+// clientInfo. A test checks it against herdr-plugin.toml.
+const pluginVersion = "0.2.0"
+
+// mcpRPCError is a JSON-RPC error returned by the MCP endpoint.
+type mcpRPCError struct {
+	Code    int
+	Message string
+}
+
+func (e *mcpRPCError) Error() string { return fmt.Sprintf("%s (code %d)", e.Message, e.Code) }
+
+// toolMissingError reports whether a failed call means the tool does not
+// exist. Stage 0 recorded the live shape: the call succeeds at the JSON-RPC
+// layer with isError true and text "MCP error -32602: Tool X not found". A
+// JSON-RPC error with the same meaning is accepted too.
+func toolMissingError(name string, result json.RawMessage, err error) error {
+	missing := fmt.Errorf("tool %q is not available: %w", name, errToolMissing)
+	var rpc *mcpRPCError
+	if errors.As(err, &rpc) {
+		if rpc.Code == -32601 || (rpc.Code == -32602 && strings.Contains(rpc.Message, "not found")) {
+			return missing
+		}
+		return nil
+	}
+	var tr toolResult
+	if err == nil && json.Unmarshal(result, &tr) == nil && tr.IsError && len(tr.Content) > 0 {
+		t := tr.Content[0].Text
+		if strings.Contains(t, "-32602") && strings.Contains(t, "Tool "+name+" not found") {
+			return missing
+		}
+	}
+	return nil
+}
+
 // mcpResponse is the JSON-RPC envelope carried inside the SSE-framed body
 // (confirmed in the Task 0a spike: POST /v1/mcp returns
 // Content-Type: text/event-stream with one `data: {...}` JSON-RPC message).
 type mcpResponse struct {
 	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
+	Error  *mcpRPCError    `json:"error"`
 }
 
 // toolResult is the shape of a tools/call result: content is a list of
@@ -92,7 +133,7 @@ func rawMCPCall(ctx context.Context, client *http.Client, accessToken, sessionID
 		return nil, newSessionID, fmt.Errorf("mcp %s: %w", method, err)
 	}
 	if envelope.Error != nil {
-		return nil, newSessionID, fmt.Errorf("mcp %s: %s (code %d)", method, envelope.Error.Message, envelope.Error.Code)
+		return nil, newSessionID, fmt.Errorf("mcp %s: %w", method, envelope.Error)
 	}
 	return envelope.Result, newSessionID, nil
 }
@@ -212,6 +253,9 @@ func refreshAndSave(ctx context.Context, client *http.Client) (string, error) {
 			return credentials{}, fmt.Errorf("%w: %v", errSignedOut, err)
 		}
 		next := tokenResponseToCredentials(creds.ClientID, tok)
+		// A refresh response carries no site or account; keep what sign-in
+		// resolved so every refresh doesn't force a new lookup.
+		next.CloudID, next.SiteURL, next.AccountID = creds.CloudID, creds.SiteURL, creds.AccountID
 		accessToken = next.AccessToken
 		return next, nil
 	})
@@ -236,7 +280,7 @@ func callTool(ctx context.Context, client *http.Client, name string, args map[st
 		_, sessionID, err := rawMCPCall(ctx, client, accessToken, "", "initialize", map[string]any{
 			"protocolVersion": "2025-06-18",
 			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "herdr-jira", "version": "0.1"},
+			"clientInfo":      map[string]any{"name": "herdr-jira", "version": pluginVersion},
 		})
 		if err == nil {
 			var result json.RawMessage
@@ -244,6 +288,9 @@ func callTool(ctx context.Context, client *http.Client, name string, args map[st
 				"name":      name,
 				"arguments": args,
 			})
+			if missing := toolMissingError(name, result, err); missing != nil {
+				return nil, missing
+			}
 			if err == nil {
 				return result, nil
 			}
