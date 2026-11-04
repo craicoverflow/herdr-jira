@@ -32,7 +32,7 @@ var errToolMissing = errors.New("the Atlassian MCP server may have changed")
 
 // pluginVersion is the plugin's version, used in the User-Agent and the MCP
 // clientInfo. A test checks it against herdr-plugin.toml.
-const pluginVersion = "0.2.0"
+const pluginVersion = "0.3.0"
 
 // mcpRPCError is a JSON-RPC error returned by the MCP endpoint.
 type mcpRPCError struct {
