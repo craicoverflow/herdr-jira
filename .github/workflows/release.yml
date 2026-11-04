@@ -46,4 +46,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/herdr-jira-* dist/checksums.txt --title "$TAG" --generate-notes
+        run: |
+          # A release may already exist (e.g. drafted in the UI); attach to it
+          # rather than failing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/herdr-jira-* dist/checksums.txt --clobber
+          else
+            gh release create "$TAG" dist/herdr-jira-* dist/checksums.txt --title "$TAG" --generate-notes
+          fi
