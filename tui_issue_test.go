@@ -89,7 +89,7 @@ func TestIssueActionDetailLoadDoesNotKnockOutBackgroundListLoad(t *testing.T) {
 	if pm.phase != phaseReady {
 		t.Fatalf("phase after esc = %v, want phaseReady", pm.phase)
 	}
-	if len(pm.list.Items()) != 1 {
-		t.Errorf("list has %d items, want 1 (from the background load)", len(pm.list.Items()))
+	if got := rowKeys(pm); len(got) != 1 {
+		t.Errorf("list rows = %v, want 1 (from the background load)", got)
 	}
 }

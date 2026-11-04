@@ -6,44 +6,119 @@ import (
 	"path/filepath"
 )
 
-// starState is starred_epics.json: epics the user has pinned that they
-// don't own (found via the epics tab's [ctrl+f] search), so the starred
-// list survives restarts. Epics is ordered star-order, oldest first, and
-// that order is preserved across add/remove so the list doesn't reshuffle
-// on every load.
-type starState struct {
-	Epics []starredEpic `json:"epics"`
+// starred_epics.json holds the epics the user has starred. Stars are local to
+// the plugin (never written to Jira) and grouped by the Jira site (cloud ID)
+// they belong to:
+//
+//	{"sites": {"<cloudId>": {"epics": [{"key": "PROJ-1", "summary": "…"}]}}}
+//
+// The previous shape was a top-level {"epics": [{"key", "status"}]} list. It
+// is read as belonging to the current site and moved under it on the next
+// write.
+
+// starEntry is one starred epic. The summary is kept only so a human reading
+// the file can tell what a key was; status always comes from Jira.
+type starEntry struct {
+	Key     string `json:"key"`
+	Summary string `json:"summary,omitempty"`
 }
 
-// starredEpic keeps the last known status alongside the key, mirroring
-// labelState's cacheEntry — so one epic that's since been deleted or made
-// inaccessible falls back to showing what was last seen for that row
-// instead of a failed batch lookup blanking the whole starred list.
-type starredEpic struct {
+type siteStars struct {
+	Epics []starEntry `json:"epics"`
+}
+
+// legacyStar is the pre-sites entry shape, which also carried a cached status.
+type legacyStar struct {
 	Key    string       `json:"key"`
 	Status ticketStatus `json:"status"`
 }
 
-func starStatePath() string { return filepath.Join(stateDir(), "starred_epics.json") }
-
-func readStarState() starState {
-	var st starState
-	if data, err := os.ReadFile(starStatePath()); err == nil {
-		_ = json.Unmarshal(data, &st)
-	}
-	return st
+type starFile struct {
+	// Epics is the legacy top-level list. omitempty keeps it out of files
+	// written by this version, so an older binary reading one sees no stars
+	// instead of misreading the new shape.
+	Epics []legacyStar         `json:"epics,omitempty"`
+	Sites map[string]siteStars `json:"sites,omitempty"`
 }
 
-// writeStarState writes starred_epics.json atomically (temp file, then
+func starStatePath() string { return filepath.Join(stateDir(), "starred_epics.json") }
+
+func readStarFile() starFile {
+	var f starFile
+	if data, err := os.ReadFile(starStatePath()); err == nil {
+		_ = json.Unmarshal(data, &f)
+	}
+	return f
+}
+
+// starsFor returns the stars for one site: its own entry if the file has one,
+// else the legacy top-level list (an old file is attributed to the current
+// site; Jira returns nothing for keys it does not know, so a wrong guess just
+// shows no rows).
+func (f starFile) starsFor(cloudID string) []starEntry {
+	if s, ok := f.Sites[cloudID]; ok {
+		return s.Epics
+	}
+	out := make([]starEntry, 0, len(f.Epics))
+	for _, e := range f.Epics {
+		out = append(out, starEntry{Key: e.Key, Summary: e.Status.Summary})
+	}
+	return out
+}
+
+// readStars returns the current site's stars in star order, oldest first.
+func readStars(cloudID string) []starEntry {
+	return readStarFile().starsFor(cloudID)
+}
+
+// starredKeys returns the current site's starred keys in star order.
+func starredKeys(cloudID string) []string {
+	stars := readStars(cloudID)
+	keys := make([]string, len(stars))
+	for i, s := range stars {
+		keys[i] = s.Key
+	}
+	return keys
+}
+
+// writeStars replaces this site's stars, keeping every other site's entry. The
+// legacy top-level list is dropped: it has now been moved under this site.
+// There is no lock; two popups starring at once is last-writer-wins.
+func writeStars(cloudID string, stars []starEntry) error {
+	f := readStarFile()
+	if f.Sites == nil {
+		f.Sites = map[string]siteStars{}
+	}
+	if stars == nil {
+		stars = []starEntry{}
+	}
+	f.Sites[cloudID] = siteStars{Epics: stars}
+	f.Epics = nil
+	return writeStarFile(f)
+}
+
+// toggleStar stars the epic if it is not starred, else unstars it. It reports
+// whether the epic is starred afterwards.
+func toggleStar(cloudID string, epic ticketStatus) (starred bool, err error) {
+	stars := readStars(cloudID)
+	for i, s := range stars {
+		if s.Key == epic.Key {
+			return false, writeStars(cloudID, append(stars[:i:i], stars[i+1:]...))
+		}
+	}
+	return true, writeStars(cloudID, append(stars, starEntry{Key: epic.Key, Summary: epic.Summary}))
+}
+
+// writeStarFile writes starred_epics.json atomically (temp file, then
 // rename) — the same approach labelstate.go uses. This is a local pin
 // list, not a secret, so it doesn't need the 0600 + flock treatment
 // credentials.json gets.
-func writeStarState(st starState) error {
+func writeStarFile(f starFile) error {
 	dir := stateDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	data, err := json.Marshal(st)
+	data, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
@@ -61,54 +136,4 @@ func writeStarState(st starState) error {
 		return err
 	}
 	return os.Rename(tmpPath, starStatePath())
-}
-
-func (st starState) index(key string) int {
-	for i, e := range st.Epics {
-		if e.Key == key {
-			return i
-		}
-	}
-	return -1
-}
-
-func (st starState) has(key string) bool { return st.index(key) >= 0 }
-
-// add pins status's key. Returns false (no change made) if it was already
-// starred, so a caller driving a toggle key can fall back to unstarring.
-func (st *starState) add(status ticketStatus) bool {
-	if st.has(status.Key) {
-		return false
-	}
-	st.Epics = append(st.Epics, starredEpic{Key: status.Key, Status: status})
-	return true
-}
-
-// remove unpins key. Returns false if it wasn't starred.
-func (st *starState) remove(key string) bool {
-	i := st.index(key)
-	if i < 0 {
-		return false
-	}
-	st.Epics = append(st.Epics[:i], st.Epics[i+1:]...)
-	return true
-}
-
-// updateStatus refreshes a starred key's cached status in place. A no-op
-// if status's key isn't starred (e.g. it was unstarred while a background
-// refresh was in flight).
-func (st *starState) updateStatus(status ticketStatus) {
-	if i := st.index(status.Key); i >= 0 {
-		st.Epics[i].Status = status
-	}
-}
-
-// statuses returns the starred epics in star order, ready for
-// setListIssues.
-func (st starState) statuses() []ticketStatus {
-	out := make([]ticketStatus, len(st.Epics))
-	for i, e := range st.Epics {
-		out[i] = e.Status
-	}
-	return out
 }

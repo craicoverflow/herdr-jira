@@ -20,12 +20,31 @@ func readPickerCache() []ticketStatus {
 	return out
 }
 
-func writePickerCache(issues []ticketStatus) error {
+// splitCached separates a cached list back into the two Issues-lane queries.
+// The file is one flat array: sub-tasks are the rows with a negative
+// hierarchy level. Caches written before that field existed hold every row
+// as a normal issue, so sub-tasks show at top level until the first refresh.
+func splitCached(cached []ticketStatus) (issues, subtasks []ticketStatus) {
+	for _, t := range cached {
+		if t.HierarchyLevel < 0 {
+			subtasks = append(subtasks, t)
+		} else {
+			issues = append(issues, t)
+		}
+	}
+	return issues, subtasks
+}
+
+// writePickerCache stores the Issues lane: issues followed by sub-tasks. It
+// never receives epics or search hits.
+func writePickerCache(issues, subtasks []ticketStatus) error {
+	all := make([]ticketStatus, 0, len(issues)+len(subtasks))
+	all = append(append(all, issues...), subtasks...)
 	dir := stateDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	data, err := json.Marshal(issues)
+	data, err := json.Marshal(all)
 	if err != nil {
 		return err
 	}

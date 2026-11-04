@@ -11,19 +11,18 @@ import (
 // fakeJiraSource records every search call and answers from a fixed map,
 // so tests can assert exactly one batched call happened.
 type fakeJiraSource struct {
-	results      map[string]ticketStatus
-	calls        [][]string
-	searchErr    error
-	myIssuesList []ticketStatus
-	myIssuesErr  error
+	results        map[string]ticketStatus
+	calls          [][]string
+	searchErr      error
+	myIssuesList   []ticketStatus
+	mySubtasksList []ticketStatus
+	myIssuesMore   bool
+	mySubtasksMore bool
+	myIssuesErr    error
 
-	searchTextCalls  []string // queries passed to searchText, in order
-	searchTextResult []ticketStatus
-	searchTextErr    error
-
-	searchEpicsCalls  []string // queries passed to searchEpics, in order
-	searchEpicsResult []ticketStatus
-	searchEpicsErr    error
+	searchScopedCalls  []scopedCall // queries passed to searchScoped, in order
+	searchScopedResult []ticketStatus
+	searchScopedErr    error
 
 	getResult       issueDetail
 	getErr          error
@@ -33,6 +32,7 @@ type fakeJiraSource struct {
 	transitionCalls []string // transition IDs applied, in order
 
 	myEpicsList        []ticketStatus
+	myEpicsMore        bool
 	myEpicsErr         error
 	epicChildrenCalls  []string // epic keys passed to epicChildren, in order
 	epicChildrenResult []ticketStatus
@@ -47,8 +47,14 @@ func (f *fakeJiraSource) accountID(ctx context.Context) (string, error) {
 	return f.accountIDResult, f.accountIDErr
 }
 
-func (f *fakeJiraSource) myEpics(ctx context.Context) ([]ticketStatus, error) {
-	return f.myEpicsList, f.myEpicsErr
+// scopedCall records one searchScoped call.
+type scopedCall struct {
+	query string
+	scope searchScope
+}
+
+func (f *fakeJiraSource) myEpics(ctx context.Context) ([]ticketStatus, bool, error) {
+	return f.myEpicsList, f.myEpicsMore, f.myEpicsErr
 }
 
 func (f *fakeJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error) {
@@ -61,18 +67,13 @@ func (f *fakeJiraSource) assign(ctx context.Context, key, accountID string) erro
 	return f.assignErr
 }
 
-func (f *fakeJiraSource) myIssues(ctx context.Context) ([]ticketStatus, error) {
-	return f.myIssuesList, f.myIssuesErr
+func (f *fakeJiraSource) myIssues(ctx context.Context) ([]ticketStatus, []ticketStatus, bool, bool, error) {
+	return f.myIssuesList, f.mySubtasksList, f.myIssuesMore, f.mySubtasksMore, f.myIssuesErr
 }
 
-func (f *fakeJiraSource) searchText(ctx context.Context, query string) ([]ticketStatus, error) {
-	f.searchTextCalls = append(f.searchTextCalls, query)
-	return f.searchTextResult, f.searchTextErr
-}
-
-func (f *fakeJiraSource) searchEpics(ctx context.Context, query string) ([]ticketStatus, error) {
-	f.searchEpicsCalls = append(f.searchEpicsCalls, query)
-	return f.searchEpicsResult, f.searchEpicsErr
+func (f *fakeJiraSource) searchScoped(ctx context.Context, query string, scope searchScope) ([]ticketStatus, error) {
+	f.searchScopedCalls = append(f.searchScopedCalls, scopedCall{query, scope})
+	return f.searchScopedResult, f.searchScopedErr
 }
 
 func (f *fakeJiraSource) get(ctx context.Context, key string) (issueDetail, error) {

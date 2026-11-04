@@ -1,49 +1,53 @@
 # herdr-jira
 
-A [herdr](https://herdr.dev) plugin that brings Jira into your terminal: see
-your issues, search any ticket, drill into epics, and transition status —
-all without leaving your pane.
+A [herdr](https://herdr.dev) plugin that brings Jira Cloud into your terminal:
+see your issues and epics, search, change an issue's status, assign it to
+yourself, branch from it, and see the ticket for your current branch in the
+herdr sidebar — all without leaving your pane.
 
 Talks to Jira as a standalone MCP client against `mcp.atlassian.com` — no LLM
-in the path, so no token cost regardless of call volume.
+in the path, so no token cost regardless of call volume. See
+[`docs/SPEC.md`](docs/SPEC.md) for the design.
 
-Status: MVP implemented. See [`docs/SPEC.md`](docs/SPEC.md) for the design.
+**This plugin writes to Jira.** It changes an issue's status (transitions) and
+assigns issues to you, when you ask it to. Starring an epic is local to the
+plugin and writes nothing to Jira.
 
 ## Features
 
-- **Sidebar ticket label.** Each pane shows the issue key and live status
-  for the branch it's on — updates automatically as you work, no manual
-  refresh.
-- **Your issues, one keystroke away.** A searchable popup lists every issue
-  assigned to you, newest-updated first, and paints instantly from cache
-  before refreshing.
-- **Jump straight to "this branch's ticket."** Resolves the current branch
-  to a ticket key and opens right on its detail screen.
-- **Search any issue, not just yours.** A live, debounced search against
-  Jira itself — type a key fragment for a prefix search, or free text for a
-  summary search.
-- **Epics with drill-down.** Browse your epics, step into their children,
-  and assign a child to yourself without leaving the popup.
-- **Live transitions.** Change an issue's status from a freshly fetched
-  list of valid transitions — never hardcoded.
+- **Two tabs, one scrolling list each.** **Issues** and **Epics**, each
+  divided into headed lanes with counts.
+  - *Issues:* your open issues (bugs, stories, tasks), with your sub-tasks
+    indented under their parent. No epics.
+  - *Epics:* the epics assigned to you, then the epics you have starred.
+    Anything Done is hidden.
+- **Search.** `/` filters your lanes as you type, then searches Jira for
+  matches in a *Search results* lane below them.
+- **Star team epics.** Find an epic you do not own with search, press `s` to
+  keep it in your Starred lane.
+- **Mouse.** Click a tab or a row (click the selected row again to open it)
+  and scroll with the wheel.
+- **Sidebar ticket label.** Each pane shows the issue key and live status for
+  the branch it is on, confirmed against Jira so a branch like `pr-4567-fix`
+  never shows a bogus ticket.
+- **Live transitions.** Change status from a freshly fetched list of valid
+  transitions — never hardcoded.
 - **Branch from a ticket.** Create a branch from the focused issue, with
   prompts to assign it to you and move it to In Progress.
-- **Copy a key anywhere.** Grab the focused issue's key to paste elsewhere.
 
 ## Install
-
-`herdr plugin install` pulls from `github.com/<owner>/<repo>`:
 
 ```sh
 herdr plugin install craicoverflow/herdr-jira
 ```
 
-This clones the repo and runs `scripts/build.sh`, which needs Go 1.26.8+
-installed (there are no prebuilt releases yet).
+On install, `scripts/build.sh` builds from source if Go 1.26.8+ is present;
+otherwise it downloads the prebuilt binary for your platform from the GitHub
+release and installs it only if its SHA-256 matches `checksums.txt`. No Go
+toolchain is needed. Supported: macOS and Linux, on arm64 and amd64.
 
-If you already have the repo checked out locally, you can skip the clone
-and link it directly instead, though you'll need to run `scripts/build.sh`
-yourself first:
+If you already have the repo checked out locally, link it instead and run
+`scripts/build.sh` yourself first:
 
 ```sh
 herdr plugin link /path/to/herdr-jira
@@ -51,48 +55,30 @@ herdr plugin link /path/to/herdr-jira
 
 ## First use: signing in
 
-There's no separate login step. The first time you run the `open` or
-`issue` action and the plugin has no stored credentials, it opens your
-browser for a normal Atlassian OAuth consent screen, waits for you to
-approve it, and then loads the popup. After that, a stored refresh token
-keeps you signed in — `tick` never triggers sign-in itself, so the sidebar
-just stays quiet (no label) until you've signed in once via a popup.
+There is no separate login step. The first time you run the `open` or `issue`
+action with no stored credentials, the plugin opens your browser for a normal
+Atlassian OAuth consent screen, waits for you to approve it, then loads the
+popup. A stored refresh token keeps you signed in. `tick` never triggers
+sign-in itself, so the sidebar stays quiet until you have signed in once via
+the popup.
 
-`herdr-jira login` runs the same flow directly from the terminal; it's a
-debugging entry point, not something you need day to day.
+Things that can go wrong, each with its own message:
 
-Being signed out produces the same message everywhere it comes up: in the
-`tick` log (quiet, once per event, last-known label kept on screen), in the
-picker (inline, with a `[r]` to retry), and from `status`.
+- **Blocked by your organisation.** If sign-in is refused, your organisation
+  may block third-party MCP clients; ask your Jira admin.
+- **One site only.** The account must have exactly one Jira Cloud site.
+  Several sites, none, or a non-Cloud (Server / Data Center) URL are reported
+  as errors rather than picking one silently.
+- **Changed server.** If the Atlassian MCP server renames a tool the plugin
+  uses, the error names the tool.
 
-## Sidebar label
+`herdr-jira status` prints the signed-in user, the site, and whether the
+branch key pattern is a configured value or "auto".
 
-Bind `tick` to pick up ticket status automatically — it's already wired to
-fire on `pane.focused`, `pane.agent_status_changed`, and worktree/workspace
-creation in `herdr-plugin.toml`. Add the token to an Agent sidebar row in
-`~/.config/herdr/config.toml`:
+## The popup
 
-```toml
-[ui.sidebar.agents]
-rows = [
-  ["state_icon", "machine", "workspace", "tab"],
-  ["agent", "$ticket_badge"],
-]
-```
-
-Available tokens:
-
-- `$ticket` — the issue key, e.g. `TICKET-1234`
-- `$ticket_status` — the status name, e.g. `In Progress`
-- `$ticket_badge` — both together, e.g. `TICKET-1234 In Progress`
-
-A space with no resolvable ticket key on its branch shows none of these
-(they're cleared, not left stale).
-
-## Keybindings
-
-Bind the actions in `~/.config/herdr/config.toml` — see the commented
-examples in [`herdr-plugin.toml`](herdr-plugin.toml):
+Bind the actions in `~/.config/herdr/config.toml` (see the commented examples
+in [`herdr-plugin.toml`](herdr-plugin.toml)):
 
 ```toml
 [[keys.command]]
@@ -106,90 +92,108 @@ type = "plugin_action"
 command = "herdr-jira.issue"
 ```
 
-- **`open`** — a searchable popup of every issue assigned to you
-  (`assignee = currentUser() AND statusCategory != Done`, newest-updated
-  first). The last list is cached, so it paints instantly before
-  refreshing.
-- **`issue`** — resolves the current branch to a ticket key and opens
-  straight on its detail screen. No key on the branch, or a key Jira
-  doesn't recognize, falls back to the `open` list with an inline notice
-  instead of failing.
+- **`open`** — the tabbed popup. The last Issues list is cached, so it paints
+  instantly before refreshing.
+- **`issue`** — resolves the current branch to a ticket key, confirms it with
+  Jira, and opens straight on its detail screen. No key on the branch, or one
+  Jira does not recognise, falls back to the list with a notice.
 
-In the popup: type to locally filter your issues, `Enter` to open one, `t`
-on the detail screen to fetch and choose a live transition (never
-hardcoded — always a fresh `getTransitionsForJiraIssue` call), `Esc`/`b` to
-go back, `Esc`/`q` to close.
+The popup has two input modes, shown in the footer. In *browse* mode letters
+are commands; in *search* mode (after `/`) letters type into the query, so
+`s` is the star command in browse mode and just a letter in search mode.
 
-**`Ctrl+f` — search any issue, not just yours.** Typing in the search box
-queries Jira itself (debounced ~300ms after the last keystroke), not just
-your cached "your issues" list. The query behaves in two modes:
+<!-- hotkeys:start -->
+| Key | Action |
+|---|---|
+| `enter` | open the detail screen (an epic opens its children) |
+| `/` | search: filters the lanes as you type, then searches Jira |
+| `t` | change status (a live list of valid transitions) |
+| `a` | assign to me |
+| `b` | new branch from the issue |
+| `s` | star or unstar the epic (epics only) |
+| `c` | copy the issue key |
+| `o` | open the issue in the browser |
+| `↓` / `j` | move down |
+| `↑` / `k` | move up |
+| `tab` | next tab |
+| `shift+tab` | previous tab |
+| `1` | jump to Issues |
+| `2` | jump to Epics |
+| `r` | refresh the current tab |
+| `?` | show all keys |
+| `esc` | close the popup (or clear a search) |
+| `q` | close the popup |
+<!-- hotkeys:end -->
 
-- Type something key-shaped (`TICKET-300`, complete or not) → a prefix
-  search on the issue key (`key ~ "TICKET-300*"`), so it narrows toward
-  every matching issue (`TICKET-3001`, `TICKET-3008`, …) as you keep
-  typing.
-- Type anything else → a text search against the issue summary
-  (`summary ~ "<text>*"`).
+In search mode, `↑` `↓` move the cursor, `enter` opens the row, and `esc`
+clears the search and puts the cursor back where it was. `b` is *not* "back":
+`esc` is the only back key. `Ctrl+c` always closes the popup.
 
-`Esc` clears the search box first, then (on an empty box) returns to "your
-issues."
+**Epics.** `enter` on an epic lists its children. There, `enter` opens a
+child, `i` opens the epic's own detail, `t` `a` `b` `c` `o` act on the
+highlighted child, and `esc` returns to the Epics tab with the cursor on that
+epic.
 
-**`e` — your epics, with drill-down and assign-to-me.** Opens a vertical
-split of two lists: your own epics on top (`assignee = currentUser() AND
-issuetype = Epic AND statusCategory != Done`, newest-updated first), and
-epics you've starred below. `Tab` moves focus between the two lists.
-`Enter` on an epic (either list) loads its children
-(`parent = <epicKey>`); `Enter` on a child opens its detail screen, where
-`[a] assign to me` sits next to `[t] transition`. `Esc` steps back one
-screen at a time: child detail → children list → epics tab → your issues.
+**Search.** Typing filters your lanes at once. After a 300 ms pause it also
+runs one search against Jira, scoped to the tab (issues and sub-tasks, or
+epics, that are not Done). A key-shaped query (`PROJ-12`) matches on key
+prefix; anything else matches on summary. Hits go in a *Search results* lane
+below your lanes, without repeating rows you already see.
 
-**`Ctrl+f` (in the epics tab)—find and star a team epic you don't own.**
-Opens a live search scoped to epics (same key-vs-text query behavior as the
-issue search above), so you can find an epic that isn't assigned to
-you—a team epic you contribute to but don't own. `Tab` moves focus from the
-query box into the results list; `s` there stars (or un-stars, if pressed
-again) the selected epic, adding it to the starred list in the epics tab.
-`s` only works once `Tab` has moved focus to the list—otherwise it's just
-a letter in your search text. Starring is local to this plugin (stored in
-`starred_epics.json` next to the rest of its state); it doesn't write
-anything to Jira. In the starred list itself, `s` un-stars the selected
-epic directly. A starred epic keeps showing regardless of status—its
-current status (e.g. `Done`, `In Progress`) is always shown next to its
-key, so you can see at a glance when something you're tracking wraps up.
+**Stars.** `s` on an epic stars or unstars it. Stars are kept in
+`starred_epics.json` in the plugin's state directory, grouped by Jira site,
+and never written to Jira. A starred epic that is also assigned to you shows
+once, under *Assigned to me*. A starred epic that is Done, deleted or no
+longer visible is hidden (its star stays in the file).
 
-**`c` — copy the focused issue's key.** Works on any issue list (your
-issues, epics, starred epics, epic children) and on the detail screen.
-Useful for pasting a key elsewhere.
+**Upgrading.** The old keys are gone: `e` (epics), `Ctrl+f` (search) and
+`Tab` as list focus have no replacement — use the tabs and `/`. A
+`key_pattern` copied from an older default (`TICKET-…`) is used as given.
+`starred_epics.json` is migrated on first write; an older binary that stars
+or unstars afterwards overwrites the file and loses the migrated entries.
 
-**`o` — open the focused issue in your browser.** Works on any issue list
-and on the detail screen. Resolves straight to the issue's Jira page
-(`<your site>/browse/<KEY>`) using the site URL discovered during sign-in —
-no base URL to configure, it works against whatever Jira site you're
-authenticated against.
+## Sidebar label
 
-**`b` — new branch from the focused issue.** Prompts for a suffix (the
-issue key is the fixed prefix, e.g. typing `start-spec` for `TICKET-2815`
-makes `TICKET-2815-start-spec`) and runs `git checkout -b` in the
-space the popup was opened from. If the issue isn't already assigned to
-you, or isn't already In Progress (and a transition to it exists), it then
-asks — as two separate yes/no questions — whether to assign it to you and
-whether to transition it to In Progress.
+`tick` is wired to `pane.focused`, `pane.agent_status_changed`, and
+worktree/workspace creation in `herdr-plugin.toml`. Add a token to an Agent
+sidebar row in `~/.config/herdr/config.toml`:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "machine", "workspace", "tab"],
+  ["agent", "$ticket_badge"],
+]
+```
+
+- `$ticket` — the issue key, e.g. `PROJ-1234`
+- `$ticket_status` — the status name, e.g. `In Progress`
+- `$ticket_badge` — both together, e.g. `PROJ-1234 In Progress`
+
+A space with no ticket on its branch shows none of these (they are cleared,
+not left stale).
 
 ## Configuration
 
-Config lives at
-`~/.config/herdr/plugins/config/herdr-jira/config.json` — see
-[`config.example.json`](config.example.json). All keys are optional.
+Config lives at `~/.config/herdr/plugins/config/herdr-jira/config.json` — see
+[`config.example.json`](config.example.json). Both keys are optional.
 
 | Key | Default | What it does |
 |---|---|---|
-| `key_pattern` | `(?i)\b(TICKET-[0-9]+)\b` | The regex used to find a ticket key in a branch name, matched anywhere in the name, case-insensitively. The default is scoped to the `TICKET` project rather than a bare generic key pattern, because a generic `[A-Za-z0-9]+-\d+` regex matches plenty of non-Jira things in real branch names (PR numbers, step counters) — see [`docs/spike-findings.md`](docs/spike-findings.md)'s Task 0b section. Override this for a different project prefix, or to match more than one. |
-| `label_refresh_seconds` | `60` | How old a ticket's cached status may get before a `tick` asks Jira about it again. |
+| `key_pattern` | unset (auto) | Leave unset and the plugin finds Jira-shaped keys in the branch name and keeps only those Jira confirms exist. Set a regex to use it as given, with no Jira check. |
+| `label_refresh_seconds` | `60` | How old a ticket's cached status may get before a `tick` asks Jira again. |
 
-The popup's "your issues" JQL
-(`assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`)
-is not configurable in this MVP — it's a deliberate choice to keep the
-config surface small; a knob can be added if it turns out to matter.
+The lane queries, lane layout, icons and hotkeys are not configurable; a knob
+can be added if someone needs one.
+
+## Known limitations
+
+- Jira Cloud only; one Atlassian site per account.
+- The Epics tab uses the issue type named `Epic`. A site that renames or
+  localises that type shows no epics.
+- Each lane shows one page (50). A lane that hit its cap shows `50+`.
+- Mouse support needs herdr to pass mouse events to the popup; if it does
+  not, the keyboard works as normal.
 
 ## Build
 

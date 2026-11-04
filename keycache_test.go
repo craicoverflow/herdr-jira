@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -174,5 +175,48 @@ func TestWriteKeyCachePrunesOldEntries(t *testing.T) {
 	got := readKeyCache("cloud-1")
 	if _, ok := got.Keys["OLD-1"]; ok || len(got.Keys) != 1 {
 		t.Errorf("keys = %v, want only NEW-1", got.Keys)
+	}
+}
+
+func TestWriteKeyCacheDropsOldEntriesAndFailsCleanlyWhenTheStateDirIsAFile(t *testing.T) {
+	withTempStateDir(t)
+	now := time.Now()
+	f := keyCacheFile{CloudID: "c", Keys: map[string]keyCacheEntry{
+		"OLD-1": {Result: "found", Recorded: now.Add(-2 * keyCacheMaxAge)},
+		"NEW-1": {Result: "found", Recorded: now},
+	}}
+	if err := writeKeyCache(f, now); err != nil {
+		t.Fatalf("writeKeyCache: %v", err)
+	}
+	got := readKeyCache("c")
+	if _, ok := got.Keys["OLD-1"]; ok {
+		t.Error("an entry older than the max age must be removed on write")
+	}
+	if _, ok := got.Keys["NEW-1"]; !ok {
+		t.Error("a fresh entry must be kept")
+	}
+
+	blocked := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", blocked)
+	if err := writeKeyCache(f, now); err == nil {
+		t.Error("writing under a path that is a file must fail, not panic")
+	}
+}
+
+func TestWriteKeyCacheFailsWhenTheStateDirIsReadOnly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", dir)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := writeKeyCache(keyCacheFile{CloudID: "c", Keys: map[string]keyCacheEntry{}}, time.Now()); err == nil {
+		t.Error("an unwritable state dir must be reported")
 	}
 }

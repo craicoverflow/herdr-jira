@@ -1,161 +1,154 @@
 # herdr-jira
 
-## Problem Statement
+## Problem
 
 How might we give someone working in `herdr` the same at-a-glance,
 act-without-leaving-the-terminal relationship with their Jira tickets that
 `herdr-github` gives them with their PRs — without an LLM in the loop and
 without a personal API token they don't have?
 
-## Recommended Direction
+## What it is
 
-Port the `herdr-github` shape onto Jira: a `tick`-driven sidebar label (per
-pane/agent, showing the linked ticket's status), a `herdr-recap`-style popup
-for the full issue list, and a "this agent's ticket" action resolved from the
-current branch name (`TICKET-1234` pattern), falling back to a manual picker
-when no key is found.
+A herdr plugin with three parts:
 
-The auth path is the one real architectural decision: `herdr-jira` is its own
-standalone MCP client, not something routed through Claude or any other LLM.
-On first use it performs OAuth dynamic client registration against
-`mcp.atlassian.com` directly from the compiled binary, stores its own refresh
-token in `~/.config/herdr/plugins/config/herdr-jira/`, and from then on makes
-narrow, direct JSON-RPC calls (`searchJiraIssuesUsingJql`, `getJiraIssue`,
-`getTransitionsForJiraIssue`, `transitionJiraIssue`) on `tick` and on action
-invocation. No LLM is ever in this path, so there's no token cost regardless
-of call volume — a config-level auth-method feature flag was considered and
-dropped once this architecture made the original "wastes tokens" concern moot.
+- **A sidebar label.** `tick` sets the `$ticket`, `$ticket_status` and
+  `$ticket_badge` tokens for each space from its branch's issue.
+- **A tabbed popup** (`open`): **Issues** and **Epics**, each one scrolling
+  list divided into headed lanes.
+- **A "this agent's ticket" action** (`issue`): the branch's ticket, confirmed
+  with Jira, straight to its detail screen.
 
-One piece of API discipline worth calling out: transitions are workflow- and
-project-specific. The plugin must always call `getTransitionsForJiraIssue`
-before offering a next-state picker — it can't hardcode a status list, or it
-will offer transitions that don't exist on a given board.
+It is a standalone MCP client. On first use it performs OAuth dynamic client
+registration against `mcp.atlassian.com` from the compiled binary, stores its
+own refresh token under `~/.config/herdr/plugins/config/herdr-jira/`, and
+makes narrow JSON-RPC calls (`searchJiraIssuesUsingJql`, `getJiraIssue`,
+`getTransitionsForJiraIssue`, `transitionJiraIssue`, `editJiraIssue`). No LLM
+is in the path, so there is no token cost regardless of call volume.
 
-## Key Assumptions to Validate
+Transitions are workflow- and project-specific, so the plugin always calls
+`getTransitionsForJiraIssue` before offering a next-state picker; it never
+hardcodes a status list.
 
-- [x] `mcp.atlassian.com` supports OAuth dynamic client registration (DCR)
-      for a third-party native client outside Claude Code — confirmed by
-      attempting DCR against its `/.well-known/oauth-authorization-server`
-      metadata before writing any plugin code.
-- [x] A branch name reliably contains a parseable Jira key (e.g. `TICKET-1234`) — confirmed, conditionally: true
-      when the key pattern is scoped to known project prefixes rather than
-      a bare generic regex (which produces false positives like PR numbers).
-- [ ] The MCP tool surface (`searchJiraIssuesUsingJql`,
-      `getTransitionsForJiraIssue`, `transitionJiraIssue`, etc.) is stable
-      and sufficient for sidebar + popup + transition needs — confirm field
-      availability (status, assignee, summary) comes back in a single
-      `search` call to avoid N+1 lookups per ticket.
+## Current behaviour
 
-## MVP Scope
+### Lanes and queries
 
-**In:** OAuth bootstrap (`herdr-jira login`), `tick` on `pane.focused` /
-`pane.agent_status_changed` updating a sidebar label, `open` action
-(Recap-style popup, your assigned issues), `issue` action (this agent's
-ticket via branch detection, picker fallback), transition picker fetched live
-per-ticket via `getTransitionsForJiraIssue`.
+Lane queries use `statusCategory != Done`, and `assignee = currentUser()`
+unless noted. They sort by `updated DESC` and are capped at one page of 50; a
+lane that hit the cap shows `50+` (Jira reports `isLast: false`; there is no
+total count).
 
-**Out (for MVP):** comments, assignment changes, field edits, creating
-issues, team/board-wide views, webhook-based push notifications, any
-config-level auth-method flag.
+| Tab | Lane | Query |
+|---|---|---|
+| Issues | Assigned to me | `issuetype in standardIssueTypes() AND issuetype != Epic`, plus `issuetype in subTaskIssueTypes()` for sub-tasks (shown indented under their parent) |
+| Epics | Assigned to me | `issuetype = Epic` |
+| Epics | Starred | `key in (<starred keys>)`, then rows whose status category is Done are dropped |
+| both | Search results | remote search scoped to the tab, not Done, any assignee |
 
-## Added Post-MVP, By Request
+`standardIssueTypes()` also returns Epics (Stage 0 finding), hence the
+explicit `issuetype != Epic` and a drop of any row above hierarchy level 0.
+An epic that is both assigned and starred shows once, under Assigned to me.
+A starred key Jira no longer returns is hidden; its star stays in the file.
 
-- **Search any issue, not just yours** (2026-10-22) — the `open` popup's
-  `Ctrl+f` mode queries Jira directly instead of only locally filtering
-  "your issues." This is a deliberate reach past the MVP's assigned-to-you
-  scope; see the README's "Keybindings" section for the key-prefix-vs-text
-  search behavior it settles for. A generalized "which screen does `Esc`
-  return to" mechanism (`detailReturnPhase`) was introduced to support this
-  cleanly, replacing a prior hardcoded assumption that the detail screen's
-  back button always meant "your issues."
-- **Epics tab, drill-down, and assign-to-me** (2026-10-22) — the `open`
-  popup's `[e]` key opens a second list of every epic assigned to you;
-  selecting one drills into its children (`parent = <epicKey>`, confirmed
-  live); a
-  child's detail screen gets a new `[a] assign to me` key alongside `[t]
-  transition`. This is a second deliberate reach past the MVP's
-  assignment-changes exclusion, reusing `detailReturnPhase` the same way
-  the search feature did so `Esc` from a child's detail comes back to the
-  children list rather than "your issues."
+`buildRows` (`rows.go`) is a pure function from tab, fetched data, filter and
+search hits to a flat list of rows (heading, issue, sub-task, epic, note). It
+does no I/O, so lane order, de-duplication, counts and filtering are tested
+without a terminal. `listview.go` owns the cursor (which skips headings),
+scrolling and mouse hit-testing.
 
-- **Star/pin team epics you don't own (2026-10-27)**—the epics tab
-  (`phaseEpics`) becomes a vertical split: your own epics (`myEpics`, as
-  today) on top, and epics you've starred below, each its own
-  `list.Model` (`epicList` / `starredEpicList`) with independent sizing
-  and scroll state; `tab` moves focus between the two and routes keys to
-  whichever is focused. A new `ctrl+f`-triggered search mode, scoped to
-  `issuetype = Epic` and reusing the existing key-prefix-vs-text query
-  split from the issue search (see "Search any issue, not just yours"
-  above), is how you find an epic you don't own in the first place—it
-  queries Jira live rather than filtering `myEpics`, since by definition
-  these epics aren't in that list. `s` toggles star: pressing it on a row
-  in the search results adds the epic's key to a local starred set and
-  persists it immediately; pressing it on a row in the starred list
-  (bottom) removes it. `s` is not bound on the owned list (top)—those
-  epics are already "pinned" by ownership, so toggling there would be
-  meaningless. Starring is **local-only plugin state**, not a Jira-side
-  mutation (no watcher, flag, or label is written to the issue)—it lives
-  in a new `starred_epics.json` state file following the existing
-  `labelstate.go` pattern (atomic temp-file-then-rename write,
-  best-effort read). On every epics-tab load the starred keys are
-  resolved to fresh `ticketStatus` via the existing batched
-  `jiraSource.search` call (no new epic-specific fetch method needed),
-  the same way sidebar ticks batch lookups. `enter` on a starred row
-  drills into its children exactly like an owned epic does today
-  (`epicChildren`, `detailReturnPhase` back to the starred list). A
-  starred epic that's later deleted or made inaccessible in Jira keeps
-  showing with its last-known cached status rather than disappearing or
-  erroring out the whole batch—confirmed live against
-  `acme.atlassian.net`: `key in (<real>, <bogus>)` simply omits the
-  bogus key from its results instead of failing the call, so one bad key
-  can't blank the whole starred list, and `starred_epics.json` is never
-  mutated by a failed or partial lookup (only an explicit unstar removes
-  an entry). The two open design questions this raised were settled, not
-  left open: the epic search stays a bare, unscoped query (no
-  project-prefix narrowing like branch detection uses), and a starred
-  epic stays in the list regardless of status rather than dropping out on
-  Done—its current status (`Done`, `In Progress`, …) is always shown next
-  to its key, since that status line is already `issueItem`'s default
-  rendering and needed no extra work.
+### Search
 
-## Not Doing (and Why)
+`/` enters search mode. Typing filters the lanes locally at once; after 300 ms
+without a keystroke one remote search runs, scoped to the tab. A newer query
+makes older results stale and they are dropped. A key-shaped query matches on
+key prefix (`key ~ "PROJ-12*"`); anything else on summary
+(`summary ~ "text*"`). Hits appear in a Search results lane below the lanes,
+never repeating a row already shown, and are never written to the on-disk
+cache. `Esc` clears the search and restores the cursor.
 
-- **Config-based auth-method swap (API token / direct OAuth as
-  alternatives)** — dropped once the MCP-as-standalone-client design proved
-  to have no token-cost penalty; a second auth path would be speculative
-  complexity for a problem that no longer exists.
-- **Full issue CRUD (comments, assignment, field edits)** — this is a
-  status-and-transition tool first; broader editing is a distinct, larger
-  surface that dilutes the "glance and act" value prop herdr-github
-  established.
-- **Shared public Atlassian OAuth app for frictionless team install** — real
-  for a "shareable plugin" goal, but it's an Atlassian Developer Console
-  registration/maintenance commitment that shouldn't block getting personal
-  use working first.
-- **Push notifications on ticket changes (webhook relay)** — interesting but
-  requires hosting infrastructure outside the plugin's existing poll/tick
-  model; out of scope until the pull-based version proves useful.
+### Keys
 
-## Open Questions
+One table (`hotkeys.go`) drives the key handlers, the footer legend, the `?`
+list and the README key table, so they cannot disagree. There are two input
+modes: in browse mode letters are commands, in search mode they type. `Esc` is
+the only back key.
 
-- Does `mcp.atlassian.com` actually support DCR for a non-Claude native
-  client, or does its OAuth flow assume a Claude-brokered session? This needs
-  to be tested before any implementation time is spent.
-- What's the actual branch-naming convention in use — is `TICKET-1234`-style
-  prefixing consistent enough to make branch detection the primary (not just
-  fallback) path?
+### Branch ticket detection
 
-## Phase 0 Spike Results
+A generic key pattern finds candidates in the branch name; one batched
+`key in (...)` lookup keeps only the ones Jira knows, and results are cached
+per key (`keys.json`, per cloud ID). A non-empty `key_pattern` in config is
+used as given with no Jira check.
 
-All three assumptions above are confirmed:
+### Stars
 
-- [x] DCR, PKCE, refresh rotation, and direct `tools/call` all work against
-      `mcp.atlassian.com` for a native client (Task 0a). One operational
-      gotcha: Atlassian's Cloudflare edge blocks default HTTP client
-      User-Agents — the plugin must set a browser-like UA on every request.
-- [x] Branch detection works as the primary path, conditional on scoping
-      the key pattern to known project prefixes (`TICKET`) rather than a
-      bare generic regex, to avoid false positives like PR numbers.
-- [x] The MCP tool surface returns everything needed (summary, status +
-      category, assignee) in one batched `search` call, and transitions are
-      confirmed live/project-specific (Task 0c).
+`s` stars an epic. Stars are local plugin state in `starred_epics.json`, grouped
+by cloud ID, and never written to Jira. The pre-0.4 shape (a top-level `epics`
+list) is read as the current site's and moved under it on the first write.
+
+### Sign-in and sites
+
+One Jira Cloud site per account. No site, several sites, a non-Cloud URL, a
+sign-in blocked by organisation policy, and a renamed MCP tool each get a
+distinct message.
+
+### Distribution
+
+A release workflow builds macOS and Linux binaries (arm64 and amd64) and
+publishes them with `checksums.txt`. `scripts/build.sh` builds from source if
+Go is present, otherwise downloads the binary and installs it only if its
+SHA-256 matches.
+
+## Decision log
+
+Statements below replace earlier ones in this document's history.
+
+- **Superseded: starred Done epics stay visible.** The Epics tab now shows only
+  epics that are not Done; a starred epic that finishes disappears.
+- **Superseded: `s` is unbound on owned epics.** `s` works on any epic row.
+  Ownership no longer implies "already pinned": an assigned-and-starred epic
+  just shows once.
+- **Superseded: search is unscoped.** Search is scoped to the tab's types and
+  excludes Done items, so it never contradicts the lanes.
+- **Superseded: the split epics view.** Your epics and starred epics were two
+  stacked lists with `Tab` moving focus; they are now two lanes in one list.
+  `e`, `Ctrl+f` and `Tab` as list focus are removed with no alias.
+- **Superseded: a hardcoded `TICKET-` branch pattern.** An empty `key_pattern`
+  now means "auto".
+- **`b` no longer means "back".** `Esc` is the only back key, which removes
+  the old clash with "branch".
+- **Custom row model over `bubbles/list`.** The library counts headings as
+  items and has no mouse hit-testing; a pure row builder is simpler to test.
+  The epic children screen is the one remaining `bubbles/list`.
+
+## Not doing (and why)
+
+- **Config-based auth-method swap.** Dropped once the MCP-as-standalone-client
+  design proved to have no token-cost penalty.
+- **Full issue CRUD (comments, field edits).** This is a status-and-transition
+  tool first; broader editing dilutes the glance-and-act value.
+- **Shared public Atlassian OAuth app.** An Atlassian Developer Console
+  registration and maintenance commitment that should not block personal use.
+- **Push notifications (webhook relay).** Needs hosting outside the plugin's
+  poll/tick model.
+- **Jira Server / Data Center, multiple sites, multiple accounts.** The
+  plugin signs in through the Atlassian MCP server, which is Cloud only.
+- **Starring non-epic issues; Jira's own stars and filters.**
+- **Configurable JQL, lanes, icons or hotkeys.** Added only if someone asks.
+
+## Open questions
+
+- **Multi-site accounts.** Today a clear error names the limitation; a lane
+  per site or a site picker would be the next step.
+- **Mouse in a herdr popup.** Mouse reporting is enabled, but whether herdr
+  passes mouse events to a popup process is unverified; the keyboard path does
+  not depend on it.
+- **Sign-in from another organisation.** Whether admin policy can block the
+  OAuth flow is handled with a distinct message but unverified end to end.
+
+## Spike results
+
+See [`stage0-findings.md`](stage0-findings.md) for the recorded results of the
+Jira calls, JQL functions and paging behaviour this design relies on. The
+design that produced the tabs and lanes is in
+[`designs/generic-jira-cloud-tabs.md`](designs/generic-jira-cloud-tabs.md).
