@@ -5,10 +5,10 @@ import "testing"
 func TestStarStateAddPersistsAndPreservesOrder(t *testing.T) {
 	withTempStateDir(t)
 	st := readStarState()
-	if !st.add(ticketStatus{Key: "TICKET-1", StatusName: "Open"}) {
+	if !st.add(ticketStatus{Key: "PROJ-1", StatusName: "Open"}) {
 		t.Fatal("add should report true for a new key")
 	}
-	if !st.add(ticketStatus{Key: "TICKET-2", StatusName: "In Progress"}) {
+	if !st.add(ticketStatus{Key: "PROJ-2", StatusName: "In Progress"}) {
 		t.Fatal("add should report true for a new key")
 	}
 	if err := writeStarState(st); err != nil {
@@ -20,15 +20,15 @@ func TestStarStateAddPersistsAndPreservesOrder(t *testing.T) {
 	for _, e := range got.Epics {
 		keys = append(keys, e.Key)
 	}
-	if len(keys) != 2 || keys[0] != "TICKET-1" || keys[1] != "TICKET-2" {
-		t.Fatalf("keys after reload = %v, want [TICKET-1 TICKET-2] in that order", keys)
+	if len(keys) != 2 || keys[0] != "PROJ-1" || keys[1] != "PROJ-2" {
+		t.Fatalf("keys after reload = %v, want [PROJ-1 PROJ-2] in that order", keys)
 	}
 }
 
 func TestStarStateAddTwiceReportsNoChange(t *testing.T) {
 	var st starState
-	st.add(ticketStatus{Key: "TICKET-1"})
-	if st.add(ticketStatus{Key: "TICKET-1"}) {
+	st.add(ticketStatus{Key: "PROJ-1"})
+	if st.add(ticketStatus{Key: "PROJ-1"}) {
 		t.Error("adding an already-starred key should report false")
 	}
 	if len(st.Epics) != 1 {
@@ -38,24 +38,24 @@ func TestStarStateAddTwiceReportsNoChange(t *testing.T) {
 
 func TestStarStateRemove(t *testing.T) {
 	var st starState
-	st.add(ticketStatus{Key: "TICKET-1"})
-	st.add(ticketStatus{Key: "TICKET-2"})
+	st.add(ticketStatus{Key: "PROJ-1"})
+	st.add(ticketStatus{Key: "PROJ-2"})
 
-	if !st.remove("TICKET-1") {
+	if !st.remove("PROJ-1") {
 		t.Fatal("remove should report true for a starred key")
 	}
-	if st.remove("TICKET-1") {
+	if st.remove("PROJ-1") {
 		t.Error("removing an already-removed key should report false")
 	}
-	if len(st.Epics) != 1 || st.Epics[0].Key != "TICKET-2" {
-		t.Fatalf("Epics after remove = %v, want only TICKET-2", st.Epics)
+	if len(st.Epics) != 1 || st.Epics[0].Key != "PROJ-2" {
+		t.Fatalf("Epics after remove = %v, want only PROJ-2", st.Epics)
 	}
 }
 
 func TestStarStateUpdateStatusIsNoopForUnstarredKey(t *testing.T) {
 	var st starState
-	st.add(ticketStatus{Key: "TICKET-1", StatusName: "Open"})
-	st.updateStatus(ticketStatus{Key: "TICKET-9999", StatusName: "Done"})
+	st.add(ticketStatus{Key: "PROJ-1", StatusName: "Open"})
+	st.updateStatus(ticketStatus{Key: "PROJ-9999", StatusName: "Done"})
 	if len(st.Epics) != 1 {
 		t.Fatalf("updateStatus for an unstarred key must not add it, got %v", st.Epics)
 	}
@@ -63,8 +63,8 @@ func TestStarStateUpdateStatusIsNoopForUnstarredKey(t *testing.T) {
 
 func TestStarStateUpdateStatusRefreshesInPlace(t *testing.T) {
 	var st starState
-	st.add(ticketStatus{Key: "TICKET-1", StatusName: "Open"})
-	st.updateStatus(ticketStatus{Key: "TICKET-1", StatusName: "Done"})
+	st.add(ticketStatus{Key: "PROJ-1", StatusName: "Open"})
+	st.updateStatus(ticketStatus{Key: "PROJ-1", StatusName: "Done"})
 	if st.Epics[0].Status.StatusName != "Done" {
 		t.Errorf("status after updateStatus = %q, want Done", st.Epics[0].Status.StatusName)
 	}

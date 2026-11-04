@@ -18,11 +18,11 @@ func withFakeClock(t *testing.T, start time.Time) *time.Time {
 func TestTickCooldownSkipsSearchWithinAFewSeconds(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir := gitRepo(t, "TICKET-1-a")
+	dir := gitRepo(t, "PROJ-1-a")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	now := withFakeClock(t, time.Now())
 
-	src := &fakeJiraSource{results: map[string]ticketStatus{"TICKET-1": {Key: "TICKET-1", StatusName: "Open"}}}
+	src := &fakeJiraSource{results: map[string]ticketStatus{"PROJ-1": {Key: "PROJ-1", StatusName: "Open"}}}
 	cfg := withConfigDefaults(config{})
 
 	if err := tick(context.Background(), cfg, false, src); err != nil {
@@ -47,11 +47,11 @@ func TestTickCooldownSkipsSearchWithinAFewSeconds(t *testing.T) {
 func TestTickForceBypassesCooldown(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir := gitRepo(t, "TICKET-1-a")
+	dir := gitRepo(t, "PROJ-1-a")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	now := withFakeClock(t, time.Now())
 
-	src := &fakeJiraSource{results: map[string]ticketStatus{"TICKET-1": {Key: "TICKET-1", StatusName: "Open"}}}
+	src := &fakeJiraSource{results: map[string]ticketStatus{"PROJ-1": {Key: "PROJ-1", StatusName: "Open"}}}
 	cfg := withConfigDefaults(config{})
 
 	if err := tick(context.Background(), cfg, false, src); err != nil {
@@ -72,11 +72,11 @@ func TestTickForceBypassesCooldown(t *testing.T) {
 func TestTickOnlyAsksJiraForStaleCacheEntries(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir := gitRepo(t, "TICKET-1-a")
+	dir := gitRepo(t, "PROJ-1-a")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	now := withFakeClock(t, time.Now())
 
-	src := &fakeJiraSource{results: map[string]ticketStatus{"TICKET-1": {Key: "TICKET-1", StatusName: "Open"}}}
+	src := &fakeJiraSource{results: map[string]ticketStatus{"PROJ-1": {Key: "PROJ-1", StatusName: "Open"}}}
 	cfg := withConfigDefaults(config{})
 	cfg.LabelRefreshSeconds = 60
 
@@ -109,11 +109,11 @@ func TestTickOnlyAsksJiraForStaleCacheEntries(t *testing.T) {
 func TestTickFallsBackToCacheOnSignedOutAndExitsCleanly(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir := gitRepo(t, "TICKET-1-a")
+	dir := gitRepo(t, "PROJ-1-a")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	now := withFakeClock(t, time.Now())
 
-	src := &fakeJiraSource{results: map[string]ticketStatus{"TICKET-1": {Key: "TICKET-1", StatusName: "Open"}}}
+	src := &fakeJiraSource{results: map[string]ticketStatus{"PROJ-1": {Key: "PROJ-1", StatusName: "Open"}}}
 	cfg := withConfigDefaults(config{})
 
 	if err := tick(context.Background(), cfg, false, src); err != nil {
@@ -133,7 +133,7 @@ func TestTickFallsBackToCacheOnSignedOutAndExitsCleanly(t *testing.T) {
 
 	// The last known tokens must still have been reported, not cleared.
 	last := herdr.reports[len(herdr.reports)-1].params["tokens"].(map[string]any)
-	if last["ticket"] != "TICKET-1" {
-		t.Errorf("ticket token after a signed-out failure = %v, want the last known value TICKET-1", last["ticket"])
+	if last["ticket"] != "PROJ-1" {
+		t.Errorf("ticket token after a signed-out failure = %v, want the last known value PROJ-1", last["ticket"])
 	}
 }

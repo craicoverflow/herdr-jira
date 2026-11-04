@@ -11,7 +11,7 @@ import (
 // the name (keys appear as a bare prefix, with a trailing suffix, or
 // nested after a path segment — confirmed in the Task 0b branch audit) and
 // case-insensitively, uppercasing the result since real branches use both
-// (`TICKET-1339`, `TICKET-553`).
+// (`PROJ-1339`, `PROJ-553`).
 func extractKey(branch, pattern string) (string, bool) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
@@ -49,14 +49,42 @@ func currentBranch(cwd string) (string, bool) {
 	return branch, true
 }
 
-// resolveTicketKey is the full branch->key resolution for cwd using cfg's
-// key pattern.
-func resolveTicketKey(cwd string, cfg config) (string, bool) {
-	branch, ok := currentBranch(cwd)
-	if !ok {
-		return "", false
+// candidateKeys returns every key-shaped token in branch, upper-cased and
+// de-duplicated, in order of first appearance. They are only candidates:
+// "pr-4567" matches too, so Jira must confirm them (keycache.go).
+func candidateKeys(branch string) []string {
+	re := regexp.MustCompile(genericKeyPattern)
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(branch, -1) {
+		k := strings.ToUpper(m[1])
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
-	return extractKey(branch, cfg.KeyPattern)
+	return out
+}
+
+// resolveTicketKeys is the branch->key resolution for cwd. With a
+// user-set key_pattern it returns at most one key and userPattern is true,
+// meaning "use it as given". Otherwise it returns the candidates in
+// branch-name order, which the caller must confirm with Jira.
+func resolveTicketKeys(cwd string, cfg config) (keys []string, userPattern bool) {
+	branch, ok := currentBranch(cwd)
+	if cfg.KeyPattern != "" {
+		if !ok {
+			return nil, true
+		}
+		if key, ok := extractKey(branch, cfg.KeyPattern); ok {
+			return []string{key}, true
+		}
+		return nil, true
+	}
+	if !ok {
+		return nil, false
+	}
+	return candidateKeys(branch), false
 }
 
 // branchSuffixUnsafeRE matches runs of characters a git branch name

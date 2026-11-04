@@ -29,8 +29,8 @@ func TestBranchShortcutStartsWizard(t *testing.T) {
 	if next.phase != phaseBranchPrep {
 		t.Fatalf("phase after [b] = %v, want phaseBranchPrep", next.phase)
 	}
-	if next.branchKey != "TICKET-1" {
-		t.Errorf("branchKey = %q, want TICKET-1", next.branchKey)
+	if next.branchKey != "PROJ-1" {
+		t.Errorf("branchKey = %q, want PROJ-1", next.branchKey)
 	}
 	if next.branchReturnPhase != phaseReady {
 		t.Errorf("branchReturnPhase = %v, want phaseReady", next.branchReturnPhase)
@@ -45,7 +45,7 @@ func TestBranchPrepAsksBothQuestionsWhenNeeded(t *testing.T) {
 	pm, _ = pressRune(pm, 'b')
 
 	next, cmd := pm.Update(branchPrepLoadedMsg{
-		detail:      issueDetail{Key: "TICKET-1", StatusName: "Open"},
+		detail:      issueDetail{Key: "PROJ-1", StatusName: "Open"},
 		transitions: []transitionOption{{ID: "31", Name: "Start", ToStatusName: "In Progress"}},
 		accountID:   "acc1",
 	})
@@ -72,7 +72,7 @@ func TestBranchPrepSkipsQuestionsWhenAlreadyAssignedAndInProgress(t *testing.T) 
 	pm, _ = pressRune(pm, 'b')
 
 	next, _ := pm.Update(branchPrepLoadedMsg{
-		detail:    issueDetail{Key: "TICKET-1", StatusName: "In Progress", AssigneeAccountID: "acc1"},
+		detail:    issueDetail{Key: "PROJ-1", StatusName: "In Progress", AssigneeAccountID: "acc1"},
 		accountID: "acc1",
 	})
 	pm = next.(pickerModel)
@@ -105,7 +105,7 @@ func suffixReady(t *testing.T, src jiraSource) pickerModel {
 	pm := readyWithOneIssue(t, src)
 	pm, _ = pressRune(pm, 'b')
 	next, _ := pm.Update(branchPrepLoadedMsg{
-		detail:      issueDetail{Key: "TICKET-1", StatusName: "Open"},
+		detail:      issueDetail{Key: "PROJ-1", StatusName: "Open"},
 		transitions: []transitionOption{{ID: "31", Name: "Start", ToStatusName: "In Progress"}},
 		accountID:   "acc1",
 	})
@@ -185,8 +185,8 @@ func TestBranchFullFlowCreatesAssignsAndTransitions(t *testing.T) {
 	}
 	next, _ = pm.Update(cmd())
 	pm = next.(pickerModel)
-	if createdCwd != "/repo" || createdName != "TICKET-1-start-spec" {
-		t.Fatalf("createBranchFn called with (%q, %q), want (/repo, TICKET-1-start-spec)", createdCwd, createdName)
+	if createdCwd != "/repo" || createdName != "PROJ-1-start-spec" {
+		t.Fatalf("createBranchFn called with (%q, %q), want (/repo, PROJ-1-start-spec)", createdCwd, createdName)
 	}
 	if pm.phase != phaseBranchConfirm || pm.branchConfirmKind != branchConfirmAssign {
 		t.Fatalf("phase/kind after create = (%v, %v), want (phaseBranchConfirm, branchConfirmAssign)", pm.phase, pm.branchConfirmKind)
@@ -211,8 +211,8 @@ func TestBranchFullFlowCreatesAssignsAndTransitions(t *testing.T) {
 	if pm.phase != phaseReady {
 		t.Fatalf("phase after follow-up applied = %v, want phaseReady", pm.phase)
 	}
-	if len(src.assignCalls) != 1 || src.assignCalls[0] != "TICKET-1" {
-		t.Errorf("assignCalls = %v, want one call for TICKET-1", src.assignCalls)
+	if len(src.assignCalls) != 1 || src.assignCalls[0] != "PROJ-1" {
+		t.Errorf("assignCalls = %v, want one call for PROJ-1", src.assignCalls)
 	}
 	if len(src.transitionCalls) != 1 || src.transitionCalls[0] != "31" {
 		t.Errorf("transitionCalls = %v, want one call with ID 31", src.transitionCalls)
@@ -243,7 +243,7 @@ func TestBranchPartialFailureSaysWhatAlreadyHappened(t *testing.T) {
 	if pm.phase != phaseError {
 		t.Fatalf("phase = %v, want phaseError", pm.phase)
 	}
-	if !strings.Contains(pm.err.Error(), "TICKET-1-start-spec") || !strings.Contains(pm.err.Error(), "assigned to you") {
+	if !strings.Contains(pm.err.Error(), "PROJ-1-start-spec") || !strings.Contains(pm.err.Error(), "assigned to you") {
 		t.Errorf("err = %q, want it to mention the branch name and the assign that already succeeded", pm.err)
 	}
 }
@@ -275,7 +275,7 @@ func TestBranchConfirmNoSkipsThatFollowup(t *testing.T) {
 }
 
 func TestBranchShortcutFromEpicsListReturnsToEpics(t *testing.T) {
-	src := &fakeJiraSource{myEpicsList: []ticketStatus{{Key: "TICKET-9", StatusName: "Open"}}}
+	src := &fakeJiraSource{myEpicsList: []ticketStatus{{Key: "PROJ-9", StatusName: "Open"}}}
 	m := newTestPickerModel(t, src)
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	pm := next.(pickerModel)

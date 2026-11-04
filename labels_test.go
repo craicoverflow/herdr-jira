@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"testing"
 )
@@ -156,12 +157,12 @@ func workspaceAt(id, checkoutPath string) workspaceInfo {
 func TestTickSetsTicketBadgeForBranchWithKey(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir := gitRepo(t, "TICKET-1234-foo")
+	dir := gitRepo(t, "PROJ-1234-foo")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	herdr.panes = []paneInfo{{PaneID: "pane-1", WorkspaceID: "ws-1", Agent: "claude"}}
 
 	src := &fakeJiraSource{results: map[string]ticketStatus{
-		"TICKET-1234": {Key: "TICKET-1234", StatusName: "In Progress"},
+		"PROJ-1234": {Key: "PROJ-1234", StatusName: "In Progress"},
 	}}
 
 	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
@@ -176,8 +177,8 @@ func TestTickSetsTicketBadgeForBranchWithKey(t *testing.T) {
 		t.Errorf("method = %q, want workspace.report_metadata", wsReport.method)
 	}
 	tokens := wsReport.params["tokens"].(map[string]any)
-	if tokens["ticket_badge"] != "TICKET-1234 In Progress" {
-		t.Errorf("ticket_badge = %v, want %q", tokens["ticket_badge"], "TICKET-1234 In Progress")
+	if tokens["ticket_badge"] != "PROJ-1234 In Progress" {
+		t.Errorf("ticket_badge = %v, want %q", tokens["ticket_badge"], "PROJ-1234 In Progress")
 	}
 	paneReport := herdr.reports[1]
 	if paneReport.method != "pane.report_metadata" || paneReport.params["pane_id"] != "pane-1" {
@@ -188,16 +189,16 @@ func TestTickSetsTicketBadgeForBranchWithKey(t *testing.T) {
 func TestTickBatchesAllSpacesIntoOneSearchCall(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
-	dir1 := gitRepo(t, "TICKET-1-a")
-	dir2 := gitRepo(t, "TICKET-2-b")
+	dir1 := gitRepo(t, "PROJ-1-a")
+	dir2 := gitRepo(t, "PROJ-2-b")
 	herdr.workspaces = []workspaceInfo{
 		workspaceAt("ws-1", dir1),
 		workspaceAt("ws-2", dir2),
 	}
 
 	src := &fakeJiraSource{results: map[string]ticketStatus{
-		"TICKET-1": {Key: "TICKET-1", StatusName: "Open"},
-		"TICKET-2": {Key: "TICKET-2", StatusName: "Open"},
+		"PROJ-1": {Key: "PROJ-1", StatusName: "Open"},
+		"PROJ-2": {Key: "PROJ-2", StatusName: "Open"},
 	}}
 
 	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
@@ -241,10 +242,10 @@ func TestTickClearsTokensWhenSwitchingAwayFromKeyedBranch(t *testing.T) {
 	withTempStateDir(t)
 	herdr := withFakeHerdr(t)
 	// Space starts on a keyed branch...
-	dir := gitRepo(t, "TICKET-99-x")
+	dir := gitRepo(t, "PROJ-99-x")
 	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", dir)}
 	src := &fakeJiraSource{results: map[string]ticketStatus{
-		"TICKET-99": {Key: "TICKET-99", StatusName: "Open"},
+		"PROJ-99": {Key: "PROJ-99", StatusName: "Open"},
 	}}
 	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -272,5 +273,111 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func tokensOf(t *testing.T, r reportCall) map[string]any {
+	t.Helper()
+	return r.params["tokens"].(map[string]any)
+}
+
+func TestTickPRNumberBranchShowsNoLabel(t *testing.T) {
+	withTempStateDir(t)
+	herdr := withFakeHerdr(t)
+	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", gitRepo(t, "pr-4567-fix"))}
+	// Jira knows no PR-4567, so the lookup drops the candidate.
+	src := &fakeJiraSource{results: map[string]ticketStatus{}}
+
+	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(src.calls) != 1 {
+		t.Fatalf("search calls = %d, want 1 (the lookup)", len(src.calls))
+	}
+	if tokensOf(t, herdr.reports[0])["ticket_badge"] != nil {
+		t.Errorf("tokens = %v, want cleared", tokensOf(t, herdr.reports[0]))
+	}
+}
+
+func TestTickUserPatternSkipsLookup(t *testing.T) {
+	withTempStateDir(t)
+	herdr := withFakeHerdr(t)
+	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", gitRepo(t, "acme-7-widgets"))}
+	src := &fakeJiraSource{results: map[string]ticketStatus{
+		"ACME-7": {Key: "ACME-7", StatusName: "Open"},
+	}}
+	cfg := withConfigDefaults(config{KeyPattern: `(?i)\b(ACME-[0-9]+)\b`})
+
+	if err := tick(context.Background(), cfg, true, src); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(src.calls) != 1 {
+		t.Fatalf("search calls = %d, want exactly 1 (status fetch, no key lookup)", len(src.calls))
+	}
+	if tokensOf(t, herdr.reports[0])["ticket_badge"] != "ACME-7 Open" {
+		t.Errorf("tokens = %v", tokensOf(t, herdr.reports[0]))
+	}
+	if _, err := os.Stat(keyCachePath()); err == nil {
+		t.Error("keys.json written for a user pattern")
+	}
+}
+
+func TestTickTwoWorktreesCostOneLookupCall(t *testing.T) {
+	withTempStateDir(t)
+	herdr := withFakeHerdr(t)
+	herdr.workspaces = []workspaceInfo{
+		workspaceAt("ws-1", gitRepo(t, "PROJ-1-a")),
+		workspaceAt("ws-2", gitRepo(t, "PROJ-2-b")),
+	}
+	src := &fakeJiraSource{results: map[string]ticketStatus{
+		"PROJ-1": {Key: "PROJ-1", StatusName: "Open"},
+		"PROJ-2": {Key: "PROJ-2", StatusName: "Review"},
+	}}
+
+	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(src.calls) != 1 {
+		t.Fatalf("search calls = %d, want 1 for both worktrees (lookup seeds the status cache)", len(src.calls))
+	}
+	if tokensOf(t, herdr.reports[0])["ticket_badge"] != "PROJ-1 Open" || tokensOf(t, herdr.reports[1])["ticket_badge"] != "PROJ-2 Review" {
+		t.Errorf("reports = %+v", herdr.reports)
+	}
+}
+
+func TestTickDoneTicketIsStillConfirmedAndLabelled(t *testing.T) {
+	withTempStateDir(t)
+	herdr := withFakeHerdr(t)
+	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", gitRepo(t, "PROJ-9-old"))}
+	src := &fakeJiraSource{results: map[string]ticketStatus{
+		"PROJ-9": {Key: "PROJ-9", StatusName: "Done", StatusCategory: "done"},
+	}}
+
+	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if tokensOf(t, herdr.reports[0])["ticket_badge"] != "PROJ-9 Done" {
+		t.Errorf("tokens = %v, want the Done ticket labelled", tokensOf(t, herdr.reports[0]))
+	}
+}
+
+func TestTickSignedOutKeepsLastLabel(t *testing.T) {
+	withTempStateDir(t)
+	herdr := withFakeHerdr(t)
+	herdr.workspaces = []workspaceInfo{workspaceAt("ws-1", gitRepo(t, "PROJ-3-x"))}
+	src := &fakeJiraSource{results: map[string]ticketStatus{
+		"PROJ-3": {Key: "PROJ-3", StatusName: "Open"},
+	}}
+	if err := tick(context.Background(), withConfigDefaults(config{}), true, src); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	src.searchErr = errSignedOut
+	err := tick(context.Background(), withConfigDefaults(config{}), true, src)
+	if !isQuietTickErr(err) {
+		t.Fatalf("err = %v, want a quiet signed-out error", err)
+	}
+	last := herdr.reports[len(herdr.reports)-1]
+	if tokensOf(t, last)["ticket_badge"] != "PROJ-3 Open" {
+		t.Errorf("tokens = %v, want the last label kept", tokensOf(t, last))
 	}
 }

@@ -7,19 +7,21 @@ import (
 	"path/filepath"
 )
 
-// defaultKeyPattern is scoped to this user's actual project prefix rather
-// than a bare generic key regex: the Task 0b branch audit found a generic
-// [A-Za-z][A-Za-z0-9]+-\d+ pattern matches plenty of non-Jira things (PR
-// numbers, step counters) in real branch names. It's case-insensitive and
-// matches anywhere in the branch name (confirmed necessary: keys appear as
-// a bare prefix, with a trailing suffix, or nested after a path segment
-// like "alice/TICKET-2416-...").
-const defaultKeyPattern = `(?i)\b(TICKET-[0-9]+)\b`
+// genericKeyPattern finds candidate Jira keys in a branch name. It is
+// deliberately loose: its matches are only candidates until Jira confirms
+// them (keycache.go), because it also matches PR numbers and step counters
+// such as "pr-4567". It is case-insensitive and matches anywhere in the
+// name, since keys appear as a bare prefix, with a trailing suffix, or
+// nested after a path segment like "alice/PROJ-2416-...".
+const genericKeyPattern = `(?i)\b([A-Z][A-Z0-9]+-[0-9]+)\b`
 
 // config is herdr-jira's config.json.
 type config struct {
-	// KeyPattern is the regex used to find a Jira key in a branch name. It
-	// must have no capture groups, or exactly one capturing the key itself.
+	// KeyPattern is an optional regex used to find a Jira key in a branch
+	// name. Empty means "auto": candidates come from genericKeyPattern and
+	// Jira confirms them. A non-empty value is used as given, with no Jira
+	// check. It must have no capture groups, or exactly one capturing the
+	// key itself.
 	KeyPattern string `json:"key_pattern"`
 	// LabelRefreshSeconds is how old a ticket's cached status may get
 	// before a tick asks Jira about it again.
@@ -27,9 +29,6 @@ type config struct {
 }
 
 func withConfigDefaults(cfg config) config {
-	if cfg.KeyPattern == "" {
-		cfg.KeyPattern = defaultKeyPattern
-	}
 	if cfg.LabelRefreshSeconds <= 0 {
 		cfg.LabelRefreshSeconds = 60
 	}
