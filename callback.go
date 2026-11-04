@@ -37,7 +37,9 @@ func waitForCallback(ctx context.Context, ln net.Listener, expectedState string)
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
 			res := callbackResult{Code: q.Get("code"), State: q.Get("state")}
-			if errStr := q.Get("error"); errStr != "" {
+			if errStr := q.Get("error"); errStr == "access_denied" {
+				res.Err = errConsentBlocked
+			} else if errStr != "" {
 				res.Err = fmt.Errorf("authorization server returned error: %s", errStr)
 			} else if res.State != expectedState {
 				res.Err = fmt.Errorf("state mismatch: got %q", res.State)

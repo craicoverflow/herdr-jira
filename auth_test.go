@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,5 +136,20 @@ func TestRefreshAccessTokenPostsExpectedForm(t *testing.T) {
 	}
 	if tok.RefreshToken != "rotated-refresh" {
 		t.Errorf("RefreshToken = %q, want rotated-refresh (rotation must be persisted)", tok.RefreshToken)
+	}
+}
+
+func TestRegisterClientForbiddenIsConsentBlocked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"access_denied"}`))
+	}))
+	defer srv.Close()
+	_, err := registerClientAt(context.Background(), srv.Client(), srv.URL, "http://127.0.0.1:1/callback")
+	if !errors.Is(err, errConsentBlocked) {
+		t.Fatalf("err = %v, want errConsentBlocked", err)
+	}
+	if !strings.Contains(err.Error(), "ask your Jira admin") {
+		t.Errorf("err = %q, want the admin hint", err)
 	}
 }
