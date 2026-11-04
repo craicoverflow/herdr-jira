@@ -1,0 +1,63 @@
+{
+  "_fixture_note": "Synthetic, shape-matched to a real searchJiraIssuesUsingJql response. Keys, users, summaries, cloudId, and URLs are fabricated.",
+  "_fixture_note2": "This is the INNER payload shape: Claude's MCP tool interface returns this directly. A raw JSON-RPC client (as herdr-jira's own MCP client will be) instead gets this same JSON as a *string* inside result.content[0].text, per Task 0a's envelope finding.",
+  "issues": [
+    {
+      "id": "10001",
+      "key": "TICKET-9001",
+      "fields": {
+        "summary": "Example ticket summary one",
+        "issuetype": {
+          "id": "10004",
+          "name": "Bug",
+          "subtask": false
+        },
+        "assignee": {
+          "accountId": "example-account-id-1",
+          "emailAddress": "user@example.com",
+          "displayName": "Example User",
+          "active": true
+        },
+        "status": {
+          "id": "3",
+          "name": "In Progress",
+          "statusCategory": {
+            "id": 4,
+            "key": "indeterminate",
+            "colorName": "yellow",
+            "name": "In Progress"
+          }
+        }
+      }
+    },
+    {
+      "id": "10002",
+      "key": "TICKET-9002",
+      "fields": {
+        "summary": "Example ticket summary two",
+        "issuetype": {
+          "id": "10002",
+          "name": "Task",
+          "subtask": false
+        },
+        "assignee": {
+          "accountId": "example-account-id-1",
+          "emailAddress": "user@example.com",
+          "displayName": "Example User",
+          "active": true
+        },
+        "status": {
+          "id": "6",
+          "name": "Closed",
+          "statusCategory": {
+            "id": 3,
+            "key": "done",
+            "colorName": "green",
+            "name": "Done"
+          }
+        }
+      }
+    }
+  ],
+  "isLast": true
+}

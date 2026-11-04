@@ -1,0 +1,4 @@
+{
+  "key_pattern": "(?i)\\b(TICKET-[0-9]+)\\b",
+  "label_refresh_seconds": 60
+}
