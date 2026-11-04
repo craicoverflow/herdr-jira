@@ -1,0 +1,72 @@
+id = "herdr-jira"
+name = "Jira"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Your Jira issues in a herdr popup: status, transitions, and a key to this agent's ticket, via a standalone MCP client against mcp.atlassian.com."
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["sh", "scripts/build.sh"]
+
+# Bind it to a key in ~/.config/herdr/config.toml:
+#   [[keys.command]]
+#   key = "prefix+alt+j"
+#   type = "plugin_action"
+#   command = "herdr-jira.open"
+[[actions]]
+id = "open"
+title = "Jira: your issues"
+description = "Every issue assigned to you, searchable, plus your epics with drill-down; open one to see or change its state."
+contexts = ["global", "workspace", "pane"]
+command = ["./bin/herdr-jira", "action", "open"]
+
+# The ticket of the agent you're in, straight to its screen:
+#   [[keys.command]]
+#   key = "prefix+alt+t"
+#   type = "plugin_action"
+#   command = "herdr-jira.issue"
+[[actions]]
+id = "issue"
+title = "Jira: this agent's ticket"
+description = "The ticket keyed in the current branch name, or a picker when none is found."
+contexts = ["global", "workspace", "pane"]
+command = ["./bin/herdr-jira", "action", "issue"]
+
+# The picker, opened by the actions above with the invoking space's
+# resolved ticket key (or branch name, if it has none) in its env.
+[[panes]]
+id = "picker"
+title = "Jira"
+placement = "popup"
+width = "85%"
+height = "80%"
+command = ["./bin/herdr-jira", "picker"]
+
+# `tick` sets the $ticket, $ticket_status and $ticket_badge tokens on each
+# space (and its agents) from its branch's issue. It returns at once when it
+# ran moments ago, and only calls Jira for a space whose answer is older than
+# label_refresh_seconds (60 by default).
+[[startup]]
+command = ["./bin/herdr-jira", "tick", "--force"]
+
+# Switching space or pane: the cheapest moment to catch up.
+[[events]]
+on = "pane.focused"
+command = ["./bin/herdr-jira", "tick"]
+
+# An agent finishing is often when a ticket's state is worth re-checking.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./bin/herdr-jira", "tick"]
+
+[[events]]
+on = "workspace.created"
+command = ["./bin/herdr-jira", "tick"]
+
+[[events]]
+on = "worktree.created"
+command = ["./bin/herdr-jira", "tick"]
+
+[[events]]
+on = "worktree.opened"
+command = ["./bin/herdr-jira", "tick"]

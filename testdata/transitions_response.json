@@ -1,0 +1,86 @@
+{
+  "_fixture_note": "Synthetic, shape-matched to a real getTransitionsForJiraIssue response. Transition ids/names are fabricated but structurally identical (workflow transitions are project-specific, per the plan's 'never hardcode transitions' rule).",
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "11",
+      "name": "Backlog",
+      "to": {
+        "id": "11054",
+        "name": "Backlog",
+        "statusCategory": {
+          "id": 2,
+          "key": "new",
+          "colorName": "blue-gray",
+          "name": "To Do"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isLooped": false
+    },
+    {
+      "id": "31",
+      "name": "In Progress",
+      "to": {
+        "id": "3",
+        "name": "In Progress",
+        "statusCategory": {
+          "id": 4,
+          "key": "indeterminate",
+          "colorName": "yellow",
+          "name": "In Progress"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isLooped": false
+    },
+    {
+      "id": "131",
+      "name": "Closed",
+      "to": {
+        "id": "6",
+        "name": "Closed",
+        "statusCategory": {
+          "id": 3,
+          "key": "done",
+          "colorName": "green",
+          "name": "Done"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isLooped": false
+    },
+    {
+      "id": "151",
+      "name": "Blocked",
+      "to": {
+        "id": "11051",
+        "name": "Blocked",
+        "statusCategory": {
+          "id": 4,
+          "key": "indeterminate",
+          "colorName": "yellow",
+          "name": "In Progress"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isLooped": false
+    }
+  ]
+}
