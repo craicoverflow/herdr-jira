@@ -47,6 +47,14 @@ type transitionOption struct {
 	HasScreen        bool
 }
 
+// searchScope says which tab a search belongs to.
+type searchScope int
+
+const (
+	scopeIssues searchScope = iota
+	scopeEpics
+)
+
 // jiraSource is where ticket data comes from. search batches every key a
 // tick needs into as few calls as possible (the plan's "avoid N+1
 // lookups" rule): one searchJiraIssuesUsingJql call per batch of keys.
@@ -54,13 +62,16 @@ type transitionOption struct {
 // back the detail screen and its live transition picker.
 type jiraSource interface {
 	search(ctx context.Context, keys []string) (map[string]ticketStatus, error)
-	myIssues(ctx context.Context) ([]ticketStatus, error)
-	searchText(ctx context.Context, query string) ([]ticketStatus, error)
+	// myIssues returns the Issues tab's two queries separately: standard
+	// issues and sub-tasks. The more flags report that a query hit its page cap.
+	myIssues(ctx context.Context) (issues, subtasks []ticketStatus, issuesMore, subtasksMore bool, err error)
+	// searchScoped is the merged search: not-Done items matching query, of the
+	// types that belong on the given tab, assigned to anyone.
+	searchScoped(ctx context.Context, query string, scope searchScope) ([]ticketStatus, error)
 	get(ctx context.Context, key string) (issueDetail, error)
 	transitions(ctx context.Context, key string) ([]transitionOption, error)
 	transition(ctx context.Context, key, transitionID string) error
-	myEpics(ctx context.Context) ([]ticketStatus, error)
-	searchEpics(ctx context.Context, query string) ([]ticketStatus, error)
+	myEpics(ctx context.Context) (epics []ticketStatus, more bool, err error)
 	epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error)
 	assign(ctx context.Context, key, accountID string) error
 	// accountID returns the signed-in user's accountId, caching it the same
@@ -97,7 +108,7 @@ func (s *realJiraSource) search(ctx context.Context, keys []string) (map[string]
 		// No status clause: this serves branch-key confirmation, the sidebar
 		// and the starred lookup, and a Done ticket must still be found.
 		jql := "key in (" + strings.Join(batch, ",") + ")"
-		issues, err := s.runSearch(ctx, jql, len(batch))
+		issues, _, err := s.runSearch(ctx, jql, len(batch))
 		if err != nil {
 			return nil, fmt.Errorf("search %d ticket(s): %w", len(keys), err)
 		}
@@ -127,25 +138,25 @@ const (
 // right now" glance.
 const myIssuesMaxResults = 50
 
-// myIssues returns standard issues followed by sub-tasks as one slice.
-// Sub-tasks carry ParentKey.
-func (s *realJiraSource) myIssues(ctx context.Context) ([]ticketStatus, error) {
-	issues, err := s.runSearch(ctx, myStandardIssuesJQL, myIssuesMaxResults)
+// myIssues runs the two Issues-lane queries. Each is capped at one page; the
+// more flags report that the page was full and Jira has further rows.
+func (s *realJiraSource) myIssues(ctx context.Context) (issues, subtasks []ticketStatus, issuesMore, subtasksMore bool, err error) {
+	found, issuesMore, err := s.runSearch(ctx, myStandardIssuesJQL, myIssuesMaxResults)
 	if err != nil {
-		return nil, fmt.Errorf("list your issues: %w", err)
+		return nil, nil, false, false, fmt.Errorf("list your issues: %w", err)
 	}
-	out := make([]ticketStatus, 0, len(issues))
-	for _, iss := range issues {
+	issues = make([]ticketStatus, 0, len(found))
+	for _, iss := range found {
 		if iss.HierarchyLevel > 0 {
 			continue
 		}
-		out = append(out, iss)
+		issues = append(issues, iss)
 	}
-	subtasks, err := s.runSearch(ctx, mySubtasksJQL, myIssuesMaxResults)
+	subtasks, subtasksMore, err = s.runSearch(ctx, mySubtasksJQL, myIssuesMaxResults)
 	if err != nil {
-		return nil, fmt.Errorf("list your sub-tasks: %w", err)
+		return nil, nil, false, false, fmt.Errorf("list your sub-tasks: %w", err)
 	}
-	return append(out, subtasks...), nil
+	return issues, subtasks, issuesMore, subtasksMore, nil
 }
 
 // keyShapedRE recognizes a Jira key typed whole or in progress, e.g.
@@ -154,9 +165,8 @@ func (s *realJiraSource) myIssues(ctx context.Context) ([]ticketStatus, error) {
 // issue, not just the ones found in branches.
 var keyShapedRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-[0-9]+$`)
 
-// searchTextMaxResults bounds the search box's results to a quick,
-// narrow-it-down list, not a report.
-const searchTextMaxResults = 20
+// searchMaxResults bounds the merged search to one page.
+const searchMaxResults = 50
 
 // escapeJQL escapes a value for interpolation inside a double-quoted JQL
 // string literal: backslash first, then quote, so an existing backslash
@@ -167,31 +177,48 @@ func escapeJQL(s string) string {
 	return s
 }
 
-// searchText answers the search box: Jira's `key ~ "X"` matches only the
-// exact issue "X" (a plain token match), but `key ~ "X*"` — the trailing
-// wildcard — matches every key whose number starts with X, regardless of
-// how many more digits follow (confirmed live: `key ~ "OTHER-137*"` found
-// OTHER-13765 onward in one call). So any key-shaped query,
-// complete or still being typed, gets that wildcard prefix search; anything
-// else becomes a text search on summary. Unlike myIssues, this is never
-// scoped to the signed-in user — the whole point is finding issues that
-// aren't assigned to you.
-func (s *realJiraSource) searchText(ctx context.Context, query string) ([]ticketStatus, error) {
+// Type clauses for the two search scopes. standardIssueTypes() also returns
+// Epics (Stage 0), so the Issues scope excludes Epic by name and searchScoped
+// drops anything above hierarchy level 0.
+const (
+	issuesScopeClause = "(issuetype in standardIssueTypes() OR issuetype in subTaskIssueTypes()) AND issuetype != Epic"
+	epicsScopeClause  = "issuetype = Epic"
+)
+
+// searchScoped answers the search box. Jira's `key ~ "X"` matches only the
+// exact issue "X", but `key ~ "X*"` matches every key whose number starts with
+// X, so a key-shaped query (complete or still being typed) gets that
+// wildcard prefix search; anything else is a text search on summary. Unlike
+// myIssues it is not scoped to the signed-in user, but it is scoped to the
+// tab's types and never returns Done items, so the results never contradict
+// the lanes' not-Done rule.
+func (s *realJiraSource) searchScoped(ctx context.Context, query string, scope searchScope) ([]ticketStatus, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
 	}
+	clause := issuesScopeClause
+	if scope == scopeEpics {
+		clause = epicsScopeClause
+	}
 	var jql string
 	if keyShapedRE.MatchString(query) {
-		jql = `key ~ "` + escapeJQL(strings.ToUpper(query)) + `*" ORDER BY key ASC`
+		jql = clause + ` AND statusCategory != Done AND key ~ "` + escapeJQL(strings.ToUpper(query)) + `*" ORDER BY key ASC`
 	} else {
-		jql = `summary ~ "` + escapeJQL(query) + `*"`
+		jql = clause + ` AND statusCategory != Done AND summary ~ "` + escapeJQL(query) + `*"`
 	}
-	issues, err := s.runSearch(ctx, jql, searchTextMaxResults)
+	issues, _, err := s.runSearch(ctx, jql, searchMaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("search %q: %w", query, err)
 	}
-	return issues, nil
+	out := issues[:0]
+	for _, iss := range issues {
+		if scope == scopeIssues && iss.HierarchyLevel > 0 {
+			continue
+		}
+		out = append(out, iss)
+	}
+	return out, nil
 }
 
 // getFields mirrors searchFields plus assignee, for the detail screen.
@@ -310,36 +337,12 @@ const myEpicsJQL = "assignee = currentUser() AND issuetype = Epic AND statusCate
 // glance, not a report.
 const myEpicsMaxResults = 50
 
-func (s *realJiraSource) myEpics(ctx context.Context) ([]ticketStatus, error) {
-	issues, err := s.runSearch(ctx, myEpicsJQL, myEpicsMaxResults)
+func (s *realJiraSource) myEpics(ctx context.Context) ([]ticketStatus, bool, error) {
+	issues, more, err := s.runSearch(ctx, myEpicsJQL, myEpicsMaxResults)
 	if err != nil {
-		return nil, fmt.Errorf("list your epics: %w", err)
+		return nil, false, fmt.Errorf("list your epics: %w", err)
 	}
-	return issues, nil
-}
-
-// searchEpics answers the epics tab's [ctrl+f]: find an epic regardless of
-// who owns it, so a team epic you only contribute to can be found and
-// starred. Mirrors searchText's key-shaped-vs-text split verbatim, just
-// with issuetype = Epic added to the clause — deliberately a bare search,
-// not scoped to known project prefixes the way branch detection is, since
-// the whole point is finding epics outside your own projects too.
-func (s *realJiraSource) searchEpics(ctx context.Context, query string) ([]ticketStatus, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil, nil
-	}
-	var jql string
-	if keyShapedRE.MatchString(query) {
-		jql = `issuetype = Epic AND key ~ "` + escapeJQL(strings.ToUpper(query)) + `*" ORDER BY key ASC`
-	} else {
-		jql = `issuetype = Epic AND summary ~ "` + escapeJQL(query) + `*"`
-	}
-	issues, err := s.runSearch(ctx, jql, searchTextMaxResults)
-	if err != nil {
-		return nil, fmt.Errorf("search epics %q: %w", query, err)
-	}
-	return issues, nil
+	return issues, more, nil
 }
 
 // epicChildrenMaxResults bounds one epic's children list to a page.
@@ -355,7 +358,7 @@ func (s *realJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ti
 		return nil, fmt.Errorf("epicChildren: %q doesn't look like an issue key", epicKey)
 	}
 	jql := "parent = " + strings.ToUpper(epicKey) + " ORDER BY updated DESC"
-	issues, err := s.runSearch(ctx, jql, epicChildrenMaxResults)
+	issues, _, err := s.runSearch(ctx, jql, epicChildrenMaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("list children of %s: %w", epicKey, err)
 	}
@@ -387,11 +390,12 @@ func (s *realJiraSource) accountID(ctx context.Context) (string, error) {
 }
 
 // runSearch is one searchJiraIssuesUsingJql call, decoded into ticketStatus
-// in Jira's returned order.
-func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults int) ([]ticketStatus, error) {
+// in Jira's returned order. more is true when Jira reports further pages
+// (isLast == false); there is no total count (Stage 0).
+func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults int) (out []ticketStatus, more bool, err error) {
 	cloudID, err := ensureCloudID(ctx, s.client)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	args := map[string]any{
 		"cloudId": cloudID,
@@ -403,9 +407,10 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 	}
 	raw, err := callTool(ctx, s.client, "searchJiraIssuesUsingJql", args)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var result struct {
+		IsLast *bool `json:"isLast"`
 		Issues []struct {
 			Key    string `json:"key"`
 			Fields struct {
@@ -427,9 +432,9 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 		} `json:"issues"`
 	}
 	if err := decodeToolResultText(raw, &result); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	out := make([]ticketStatus, 0, len(result.Issues))
+	out = make([]ticketStatus, 0, len(result.Issues))
 	for _, iss := range result.Issues {
 		out = append(out, ticketStatus{
 			Key:            iss.Key,
@@ -441,5 +446,5 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 			HierarchyLevel: iss.Fields.IssueType.HierarchyLevel,
 		})
 	}
-	return out, nil
+	return out, result.IsLast != nil && !*result.IsLast, nil
 }

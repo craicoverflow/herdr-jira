@@ -266,24 +266,34 @@ func TestBranchConfirmNoSkipsThatFollowup(t *testing.T) {
 	if pm.phase != phaseReady {
 		t.Fatalf("phase after skipping both follow-ups = %v, want phaseReady", pm.phase)
 	}
-	if cmd == nil {
-		t.Fatal("expected a status-message command even with nothing applied")
+	if cmd != nil {
+		t.Error("nothing changed in Jira, so the tab must not reload")
+	}
+	if !strings.Contains(pm.status, "PROJ-1-start-spec") {
+		t.Errorf("status = %q, want a summary naming the branch", pm.status)
 	}
 	if len(src.assignCalls) != 0 || len(src.transitionCalls) != 0 {
 		t.Errorf("expected no Jira writes when both follow-ups are skipped, got assign=%v transition=%v", src.assignCalls, src.transitionCalls)
 	}
 }
 
-func TestBranchShortcutFromEpicsListReturnsToEpics(t *testing.T) {
-	src := &fakeJiraSource{myEpicsList: []ticketStatus{{Key: "PROJ-9", StatusName: "Open"}}}
-	m := newTestPickerModel(t, src)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	pm := next.(pickerModel)
-	next, _ = pm.Update(epicsLoadedMsg{epics: src.myEpicsList})
-	pm = next.(pickerModel)
-
+func TestBranchShortcutFromEpicsTabReturnsToTheTabbedView(t *testing.T) {
+	pm := epicsReady(t, &fakeJiraSource{})
 	pm, _ = pressRune(pm, 'b')
-	if pm.phase != phaseBranchPrep || pm.branchReturnPhase != phaseEpics {
-		t.Fatalf("phase/returnPhase = (%v, %v), want (phaseBranchPrep, phaseEpics)", pm.phase, pm.branchReturnPhase)
+	if pm.phase != phaseBranchPrep || pm.branchReturnPhase != phaseReady {
+		t.Fatalf("phase/returnPhase = (%v, %v), want (phaseBranchPrep, phaseReady)", pm.phase, pm.branchReturnPhase)
+	}
+	if pm.branchKey != "PROJ-3008" {
+		t.Errorf("branchKey = %q, want the epic under the cursor", pm.branchKey)
+	}
+}
+
+func TestBranchShortcutFromChildrenReturnsToChildren(t *testing.T) {
+	pm := epicsReady(t, &fakeJiraSource{})
+	pm, _ = send(pm, tea.KeyMsg{Type: tea.KeyEnter})
+	pm, _ = send(pm, epicChildrenLoadedMsg{epicKey: "PROJ-3008", issues: []ticketStatus{{Key: "PROJ-3011"}}})
+	pm, _ = pressRune(pm, 'b')
+	if pm.phase != phaseBranchPrep || pm.branchReturnPhase != phaseEpicChildren || pm.branchKey != "PROJ-3011" {
+		t.Fatalf("phase %v return %v key %q", pm.phase, pm.branchReturnPhase, pm.branchKey)
 	}
 }

@@ -16,7 +16,7 @@ command = ["sh", "scripts/build.sh"]
 [[actions]]
 id = "open"
 title = "Jira: your issues"
-description = "Issues assigned to you and your epics, searchable; open one to see or change its state."
+description = "Two tabs, Issues and Epics, in headed lanes: yours, starred epics and search results. Open one to see or change its state."
 contexts = ["global", "workspace", "pane"]
 command = ["./bin/herdr-jira", "action", "open"]
 

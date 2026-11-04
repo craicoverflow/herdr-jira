@@ -125,149 +125,86 @@ func TestRealJiraSourceTransitionsDecodesFixture(t *testing.T) {
 	}
 }
 
-func TestRealJiraSourceSearchTextBuildsExpectedJQL(t *testing.T) {
+func TestRealJiraSourceSearchScopedBuildsExpectedJQL(t *testing.T) {
+	const issuesClause = `(issuetype in standardIssueTypes() OR issuetype in subTaskIssueTypes()) AND issuetype != Epic AND statusCategory != Done`
+	const epicsClause = `issuetype = Epic AND statusCategory != Done`
 	cases := []struct {
 		name  string
+		scope searchScope
 		query string
 		want  string
 	}{
-		{"full key, upper", "PROJ-1234", `key ~ "PROJ-1234*" ORDER BY key ASC`},
-		{"full key, lower", "PROJ-1234", `key ~ "PROJ-1234*" ORDER BY key ASC`},
-		{"partial key, still typing", "PROJ-300", `key ~ "PROJ-300*" ORDER BY key ASC`},
-		{"full key, other project", "OTHER-7", `key ~ "OTHER-7*" ORDER BY key ASC`},
-		{"free text", "widget", `summary ~ "widget*"`},
-		{"text with quote", `wid"get`, `summary ~ "wid\"get*"`},
-		{"text with backslash", `wid\get`, `summary ~ "wid\\get*"`},
+		{"issues, full key", scopeIssues, "proj-1234", issuesClause + ` AND key ~ "PROJ-1234*" ORDER BY key ASC`},
+		{"issues, partial key", scopeIssues, "PROJ-300", issuesClause + ` AND key ~ "PROJ-300*" ORDER BY key ASC`},
+		{"issues, free text", scopeIssues, "widget", issuesClause + ` AND summary ~ "widget*"`},
+		{"issues, quote", scopeIssues, `wid"get`, issuesClause + ` AND summary ~ "wid\"get*"`},
+		{"issues, backslash", scopeIssues, `wid\get`, issuesClause + ` AND summary ~ "wid\\get*"`},
+		{"epics, full key", scopeEpics, "OTHER-7", epicsClause + ` AND key ~ "OTHER-7*" ORDER BY key ASC`},
+		{"epics, free text", scopeEpics, "widget", epicsClause + ` AND summary ~ "widget*"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			withSignedInCredentials(t)
-			var gotJQL string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var req struct {
-					Method string `json:"method"`
-					Params struct {
-						Name      string `json:"name"`
-						Arguments struct {
-							JQL string `json:"jql"`
-						} `json:"arguments"`
-					} `json:"params"`
-				}
-				json.NewDecoder(r.Body).Decode(&req)
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.WriteHeader(http.StatusOK)
-				if req.Method == "initialize" {
-					fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
-					return
-				}
-				gotJQL = req.Params.Arguments.JQL
-				fmt.Fprint(w, sseToolResult(`{"issues":[]}`))
-			}))
-			defer srv.Close()
-			orig := mcpEndpoint
-			mcpEndpoint = srv.URL
-			defer func() { mcpEndpoint = orig }()
-
+			srv, jqls, maxes := laneServer(t, nil)
 			src := &realJiraSource{client: srv.Client()}
-			if _, err := src.searchText(t.Context(), tc.query); err != nil {
-				t.Fatalf("searchText: %v", err)
+			if _, err := src.searchScoped(t.Context(), tc.query, tc.scope); err != nil {
+				t.Fatalf("searchScoped: %v", err)
 			}
-			if gotJQL != tc.want {
-				t.Errorf("jql = %q, want %q", gotJQL, tc.want)
+			if len(*jqls) != 1 || (*jqls)[0] != tc.want {
+				t.Errorf("jql = %q, want %q", *jqls, tc.want)
+			}
+			if (*maxes)[0] != 50 {
+				t.Errorf("maxResults = %d, want 50", (*maxes)[0])
 			}
 		})
 	}
 }
 
-func TestRealJiraSourceSearchTextEmptyQueryDoesNotCallJira(t *testing.T) {
+func TestRealJiraSourceSearchScopedEmptyQueryDoesNotCallJira(t *testing.T) {
 	withSignedInCredentials(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("searchText must not call Jira for an empty query")
-	}))
-	defer srv.Close()
-	orig := mcpEndpoint
-	mcpEndpoint = srv.URL
-	defer func() { mcpEndpoint = orig }()
-
+	srv, jqls, _ := laneServer(t, nil)
 	src := &realJiraSource{client: srv.Client()}
-	issues, err := src.searchText(t.Context(), "   ")
+	issues, err := src.searchScoped(t.Context(), "   ", scopeIssues)
 	if err != nil {
-		t.Fatalf("searchText: %v", err)
+		t.Fatalf("searchScoped: %v", err)
 	}
-	if issues != nil {
-		t.Errorf("issues = %v, want nil", issues)
+	if issues != nil || len(*jqls) != 0 {
+		t.Errorf("issues = %v, calls = %v, want nil and no calls", issues, *jqls)
 	}
 }
 
-func TestRealJiraSourceSearchEpicsBuildsExpectedJQL(t *testing.T) {
-	cases := []struct {
-		name  string
-		query string
-		want  string
-	}{
-		{"full key, upper", "PROJ-1234", `issuetype = Epic AND key ~ "PROJ-1234*" ORDER BY key ASC`},
-		{"full key, lower", "PROJ-1234", `issuetype = Epic AND key ~ "PROJ-1234*" ORDER BY key ASC`},
-		{"full key, other project", "OTHER-7", `issuetype = Epic AND key ~ "OTHER-7*" ORDER BY key ASC`},
-		{"free text", "widget", `issuetype = Epic AND summary ~ "widget*"`},
-		{"text with quote", `wid"get`, `issuetype = Epic AND summary ~ "wid\"get*"`},
+func TestRealJiraSourceSearchScopedIssuesDropsEpicsAboveLevelZero(t *testing.T) {
+	withSignedInCredentials(t)
+	srv, _, _ := laneServer(t, map[string]string{"standardIssueTypes()": "issues_standard.json"})
+	src := &realJiraSource{client: srv.Client()}
+	got, err := src.searchScoped(t.Context(), "doc", scopeIssues)
+	if err != nil {
+		t.Fatalf("searchScoped: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			withSignedInCredentials(t)
-			var gotJQL string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var req struct {
-					Method string `json:"method"`
-					Params struct {
-						Name      string `json:"name"`
-						Arguments struct {
-							JQL string `json:"jql"`
-						} `json:"arguments"`
-					} `json:"params"`
-				}
-				json.NewDecoder(r.Body).Decode(&req)
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.WriteHeader(http.StatusOK)
-				if req.Method == "initialize" {
-					fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
-					return
-				}
-				gotJQL = req.Params.Arguments.JQL
-				fmt.Fprint(w, sseToolResult(`{"issues":[]}`))
-			}))
-			defer srv.Close()
-			orig := mcpEndpoint
-			mcpEndpoint = srv.URL
-			defer func() { mcpEndpoint = orig }()
-
-			src := &realJiraSource{client: srv.Client()}
-			if _, err := src.searchEpics(t.Context(), tc.query); err != nil {
-				t.Fatalf("searchEpics: %v", err)
-			}
-			if gotJQL != tc.want {
-				t.Errorf("jql = %q, want %q", gotJQL, tc.want)
-			}
-		})
+	for _, iss := range got {
+		if iss.HierarchyLevel > 0 {
+			t.Errorf("%s (level %d) leaked into the Issues scope", iss.Key, iss.HierarchyLevel)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("expected the non-epic rows to survive")
 	}
 }
 
-func TestRealJiraSourceSearchEpicsEmptyQueryDoesNotCallJira(t *testing.T) {
+func TestRealJiraSourceMoreFlagFollowsIsLast(t *testing.T) {
 	withSignedInCredentials(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("searchEpics must not call Jira for an empty query")
-	}))
-	defer srv.Close()
-	orig := mcpEndpoint
-	mcpEndpoint = srv.URL
-	defer func() { mcpEndpoint = orig }()
-
+	// paging_page1.json is a real response with isLast: false.
+	srv, _, _ := laneServer(t, map[string]string{"standardIssueTypes()": "paging_page1.json"})
 	src := &realJiraSource{client: srv.Client()}
-	issues, err := src.searchEpics(t.Context(), "   ")
+	_, subtasks, issuesMore, subtasksMore, err := src.myIssues(t.Context())
 	if err != nil {
-		t.Fatalf("searchEpics: %v", err)
+		t.Fatalf("myIssues: %v", err)
 	}
-	if issues != nil {
-		t.Errorf("issues = %v, want nil", issues)
+	if !issuesMore {
+		t.Error("issuesMore = false, want true when Jira reports isLast=false")
+	}
+	if subtasksMore || len(subtasks) != 0 {
+		t.Errorf("subtasksMore = %v with %d rows, want false (empty result has no isLast)", subtasksMore, len(subtasks))
 	}
 }
 
@@ -300,7 +237,7 @@ func TestRealJiraSourceMyEpicsBuildsExpectedJQL(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	if _, err := src.myEpics(t.Context()); err != nil {
+	if _, _, err := src.myEpics(t.Context()); err != nil {
 		t.Fatalf("myEpics: %v", err)
 	}
 	want := `assignee = currentUser() AND issuetype = Epic AND statusCategory != Done ORDER BY updated DESC`
@@ -517,10 +454,11 @@ func TestRealJiraSourceMyIssuesRunsBothLaneQueriesAndDropsEpics(t *testing.T) {
 		"subTaskIssueTypes()":  "issues_subtask.json",
 	})
 	src := &realJiraSource{client: srv.Client()}
-	got, err := src.myIssues(t.Context())
+	issues, subtasks, _, _, err := src.myIssues(t.Context())
 	if err != nil {
 		t.Fatalf("myIssues: %v", err)
 	}
+	got := append(append([]ticketStatus{}, issues...), subtasks...)
 	if len(*jqls) != 2 {
 		t.Fatalf("jql calls = %d, want 2: %v", len(*jqls), *jqls)
 	}
@@ -546,7 +484,7 @@ func TestRealJiraSourceRunSearchDecodesTypeAndParent(t *testing.T) {
 	withSignedInCredentials(t)
 	srv, _, _ := laneServer(t, map[string]string{"issuetype in standardIssueTypes()": "issues_standard.json"})
 	src := &realJiraSource{client: srv.Client()}
-	got, err := src.runSearch(t.Context(), "issuetype in standardIssueTypes()", 50)
+	got, _, err := src.runSearch(t.Context(), "issuetype in standardIssueTypes()", 50)
 	if err != nil {
 		t.Fatalf("runSearch: %v", err)
 	}
