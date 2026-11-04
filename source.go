@@ -15,6 +15,11 @@ type ticketStatus struct {
 	Summary        string
 	StatusName     string
 	StatusCategory string // "new", "indeterminate", "done"
+	IssueType      string // e.g. "Task", "Epic", "Subtask"
+	ParentKey      string // "" unless the issue has a parent (sub-task, or child of an epic)
+	// HierarchyLevel is Jira's issue type level: 0 standard, -1 sub-task,
+	// 1 and up for Epic and above. 0 when Jira did not report one.
+	HierarchyLevel int
 }
 
 // issueDetail is the detail screen's view of one issue.
@@ -79,47 +84,73 @@ func newJiraSource() *realJiraSource {
 // category), and issuetype in one call is enough for the sidebar/popup;
 // assignee isn't needed since every ticket shown is already scoped to a
 // branch or to "assigned to me".
-var searchFields = []string{"summary", "status", "issuetype"}
+var searchFields = []string{"summary", "status", "issuetype", "parent"}
 
 func (s *realJiraSource) search(ctx context.Context, keys []string) (map[string]ticketStatus, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	jql := "key in (" + strings.Join(keys, ",") + ")"
-	issues, err := s.runSearch(ctx, jql, 0)
-	if err != nil {
-		return nil, fmt.Errorf("search %d ticket(s): %w", len(keys), err)
-	}
-	out := make(map[string]ticketStatus, len(issues))
-	for _, iss := range issues {
-		out[strings.ToUpper(iss.Key)] = iss
+	out := make(map[string]ticketStatus, len(keys))
+	for start := 0; start < len(keys); start += keySearchBatch {
+		end := min(start+keySearchBatch, len(keys))
+		batch := keys[start:end]
+		// No status clause: this serves branch-key confirmation, the sidebar
+		// and the starred lookup, and a Done ticket must still be found.
+		jql := "key in (" + strings.Join(batch, ",") + ")"
+		issues, err := s.runSearch(ctx, jql, len(batch))
+		if err != nil {
+			return nil, fmt.Errorf("search %d ticket(s): %w", len(keys), err)
+		}
+		for _, iss := range issues {
+			out[strings.ToUpper(iss.Key)] = iss
+		}
 	}
 	return out, nil
 }
 
-// myIssuesJQL answers the plan's open question about which JQL the popup
-// uses: everything assigned to the signed-in user that isn't done,
-// newest-updated first. Epics are excluded since they get their own list
-// (myEpicsJQL) and aren't actionable tickets like tasks/stories/bugs.
-const myIssuesJQL = "assignee = currentUser() AND issuetype != Epic AND statusCategory != Done ORDER BY updated DESC"
+// keySearchBatch is the most keys sent in one `key in (...)` call.
+const keySearchBatch = 50
 
-// myIssuesMaxResults bounds the popup's list to one page; paging through
+// The popup's "your issues" list is two queries: standard issues and
+// sub-tasks, both assigned to the signed-in user and not Done, newest-updated
+// first. Stage 0 found that standardIssueTypes() also returns Epics, so the
+// first query excludes Epic by name and myIssues also drops any row whose
+// hierarchy level is above 0 (an Initiative, or a renamed Epic). Epics have
+// their own list (myEpicsJQL).
+const (
+	myStandardIssuesJQL = "assignee = currentUser() AND issuetype in standardIssueTypes() AND issuetype != Epic AND statusCategory != Done ORDER BY updated DESC"
+	mySubtasksJQL       = "assignee = currentUser() AND issuetype in subTaskIssueTypes() AND statusCategory != Done ORDER BY updated DESC"
+)
+
+// myIssuesMaxResults bounds each query to one page; paging through
 // everything assigned to a user, ever, isn't needed for a "what's mine
 // right now" glance.
 const myIssuesMaxResults = 50
 
+// myIssues returns standard issues followed by sub-tasks as one slice.
+// Sub-tasks carry ParentKey.
 func (s *realJiraSource) myIssues(ctx context.Context) ([]ticketStatus, error) {
-	issues, err := s.runSearch(ctx, myIssuesJQL, myIssuesMaxResults)
+	issues, err := s.runSearch(ctx, myStandardIssuesJQL, myIssuesMaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("list your issues: %w", err)
 	}
-	return issues, nil
+	out := make([]ticketStatus, 0, len(issues))
+	for _, iss := range issues {
+		if iss.HierarchyLevel > 0 {
+			continue
+		}
+		out = append(out, iss)
+	}
+	subtasks, err := s.runSearch(ctx, mySubtasksJQL, myIssuesMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("list your sub-tasks: %w", err)
+	}
+	return append(out, subtasks...), nil
 }
 
 // keyShapedRE recognizes a Jira key typed whole or in progress, e.g.
-// "TICKET-1234" or "TICKET-300" (still being typed toward "TICKET-3008").
-// It's deliberately generic, unlike branch.go's defaultKeyPattern (scoped to
-// the user's own project prefixes): a search box must find any project's
+// "PROJ-1234" or "PROJ-300" (still being typed toward "PROJ-3008").
+// It's deliberately generic, unlike a user-set key_pattern in branch.go: a search box must find any project's
 // issue, not just the ones found in branches.
 var keyShapedRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-[0-9]+$`)
 
@@ -385,6 +416,13 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 						Key string `json:"key"`
 					} `json:"statusCategory"`
 				} `json:"status"`
+				IssueType struct {
+					Name           string `json:"name"`
+					HierarchyLevel int    `json:"hierarchyLevel"`
+				} `json:"issuetype"`
+				Parent struct {
+					Key string `json:"key"`
+				} `json:"parent"`
 			} `json:"fields"`
 		} `json:"issues"`
 	}
@@ -398,6 +436,9 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 			Summary:        iss.Fields.Summary,
 			StatusName:     iss.Fields.Status.Name,
 			StatusCategory: iss.Fields.Status.StatusCategory.Key,
+			IssueType:      iss.Fields.IssueType.Name,
+			ParentKey:      iss.Fields.Parent.Key,
+			HierarchyLevel: iss.Fields.IssueType.HierarchyLevel,
 		})
 	}
 	return out, nil

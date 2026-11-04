@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -89,15 +90,15 @@ func TestRealJiraSourceSearchDecodesFixture(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	got, err := src.search(t.Context(), []string{"TICKET-9001", "TICKET-9002"})
+	got, err := src.search(t.Context(), []string{"PROJ-9001", "PROJ-9002"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if got["TICKET-9001"].StatusName != "In Progress" {
-		t.Errorf("TICKET-9001 status = %q, want In Progress", got["TICKET-9001"].StatusName)
+	if got["PROJ-9001"].StatusName != "In Progress" {
+		t.Errorf("PROJ-9001 status = %q, want In Progress", got["PROJ-9001"].StatusName)
 	}
-	if got["TICKET-9002"].StatusCategory != "done" {
-		t.Errorf("TICKET-9002 category = %q, want done", got["TICKET-9002"].StatusCategory)
+	if got["PROJ-9002"].StatusCategory != "done" {
+		t.Errorf("PROJ-9002 category = %q, want done", got["PROJ-9002"].StatusCategory)
 	}
 }
 
@@ -112,7 +113,7 @@ func TestRealJiraSourceTransitionsDecodesFixture(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	got, err := src.transitions(t.Context(), "TICKET-9001")
+	got, err := src.transitions(t.Context(), "PROJ-9001")
 	if err != nil {
 		t.Fatalf("transitions: %v", err)
 	}
@@ -130,9 +131,9 @@ func TestRealJiraSourceSearchTextBuildsExpectedJQL(t *testing.T) {
 		query string
 		want  string
 	}{
-		{"full key, upper", "TICKET-1234", `key ~ "TICKET-1234*" ORDER BY key ASC`},
-		{"full key, lower", "TICKET-1234", `key ~ "TICKET-1234*" ORDER BY key ASC`},
-		{"partial key, still typing", "TICKET-300", `key ~ "TICKET-300*" ORDER BY key ASC`},
+		{"full key, upper", "PROJ-1234", `key ~ "PROJ-1234*" ORDER BY key ASC`},
+		{"full key, lower", "PROJ-1234", `key ~ "PROJ-1234*" ORDER BY key ASC`},
+		{"partial key, still typing", "PROJ-300", `key ~ "PROJ-300*" ORDER BY key ASC`},
 		{"full key, other project", "OTHER-7", `key ~ "OTHER-7*" ORDER BY key ASC`},
 		{"free text", "widget", `summary ~ "widget*"`},
 		{"text with quote", `wid"get`, `summary ~ "wid\"get*"`},
@@ -204,8 +205,8 @@ func TestRealJiraSourceSearchEpicsBuildsExpectedJQL(t *testing.T) {
 		query string
 		want  string
 	}{
-		{"full key, upper", "TICKET-1234", `issuetype = Epic AND key ~ "TICKET-1234*" ORDER BY key ASC`},
-		{"full key, lower", "TICKET-1234", `issuetype = Epic AND key ~ "TICKET-1234*" ORDER BY key ASC`},
+		{"full key, upper", "PROJ-1234", `issuetype = Epic AND key ~ "PROJ-1234*" ORDER BY key ASC`},
+		{"full key, lower", "PROJ-1234", `issuetype = Epic AND key ~ "PROJ-1234*" ORDER BY key ASC`},
 		{"full key, other project", "OTHER-7", `issuetype = Epic AND key ~ "OTHER-7*" ORDER BY key ASC`},
 		{"free text", "widget", `issuetype = Epic AND summary ~ "widget*"`},
 		{"text with quote", `wid"get`, `issuetype = Epic AND summary ~ "wid\"get*"`},
@@ -337,10 +338,10 @@ func TestRealJiraSourceEpicChildrenBuildsExpectedJQL(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	if _, err := src.epicChildren(t.Context(), "TICKET-3008"); err != nil {
+	if _, err := src.epicChildren(t.Context(), "PROJ-3008"); err != nil {
 		t.Fatalf("epicChildren: %v", err)
 	}
-	want := `parent = TICKET-3008 ORDER BY updated DESC`
+	want := `parent = PROJ-3008 ORDER BY updated DESC`
 	if gotJQL != want {
 		t.Errorf("jql = %q, want %q", gotJQL, want)
 	}
@@ -393,7 +394,7 @@ func TestRealJiraSourceAssignSendsAccountId(t *testing.T) {
 		}
 		gotIssueKey = req.Params.Arguments.IssueIdOrKey
 		json.Unmarshal(req.Params.Arguments.Fields, &gotFields)
-		fmt.Fprint(w, sseToolResult(`{"key":"TICKET-9001"}`))
+		fmt.Fprint(w, sseToolResult(`{"key":"PROJ-9001"}`))
 	}))
 	defer srv.Close()
 	orig := mcpEndpoint
@@ -401,11 +402,11 @@ func TestRealJiraSourceAssignSendsAccountId(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	if err := src.assign(t.Context(), "TICKET-9001", "account-123"); err != nil {
+	if err := src.assign(t.Context(), "PROJ-9001", "account-123"); err != nil {
 		t.Fatalf("assign: %v", err)
 	}
-	if gotIssueKey != "TICKET-9001" {
-		t.Errorf("issueIdOrKey = %q, want TICKET-9001", gotIssueKey)
+	if gotIssueKey != "PROJ-9001" {
+		t.Errorf("issueIdOrKey = %q, want PROJ-9001", gotIssueKey)
 	}
 	if gotFields.Assignee.AccountID != "account-123" {
 		t.Errorf("fields.assignee.accountId = %q, want account-123", gotFields.Assignee.AccountID)
@@ -459,7 +460,139 @@ func TestRealJiraSourceTransitionAppliesAndSucceeds(t *testing.T) {
 	defer func() { mcpEndpoint = orig }()
 
 	src := &realJiraSource{client: srv.Client()}
-	if err := src.transition(t.Context(), "TICKET-9001", "31"); err != nil {
+	if err := src.transition(t.Context(), "PROJ-9001", "31"); err != nil {
 		t.Fatalf("transition: %v", err)
+	}
+}
+
+// laneServer answers searchJiraIssuesUsingJql by matching a substring of the
+// JQL to a fixture file, and records each JQL and maxResults it receives.
+func laneServer(t *testing.T, byJQLSubstring map[string]string) (srv *httptest.Server, jqls *[]string, maxes *[]int) {
+	t.Helper()
+	jqls, maxes = &[]string{}, &[]int{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params struct {
+				Arguments struct {
+					JQL        string `json:"jql"`
+					MaxResults int    `json:"maxResults"`
+				} `json:"arguments"`
+			} `json:"params"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if req.Method == "initialize" {
+			fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+			return
+		}
+		*jqls = append(*jqls, req.Params.Arguments.JQL)
+		*maxes = append(*maxes, req.Params.Arguments.MaxResults)
+		for sub, file := range byJQLSubstring {
+			if strings.Contains(req.Params.Arguments.JQL, sub) {
+				data, err := os.ReadFile("testdata/stage0/" + file)
+				if err != nil {
+					t.Fatalf("read %s: %v", file, err)
+				}
+				fmt.Fprint(w, sseToolResult(string(data)))
+				return
+			}
+		}
+		fmt.Fprint(w, sseToolResult(`{"issues":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	orig := mcpEndpoint
+	mcpEndpoint = srv.URL
+	t.Cleanup(func() { mcpEndpoint = orig })
+	return srv, jqls, maxes
+}
+
+func TestRealJiraSourceMyIssuesRunsBothLaneQueriesAndDropsEpics(t *testing.T) {
+	withSignedInCredentials(t)
+	// The standard-types fixture is the real Stage 0 response, which
+	// includes Epics (standardIssueTypes() does not exclude them).
+	srv, jqls, _ := laneServer(t, map[string]string{
+		"standardIssueTypes()": "issues_standard.json",
+		"subTaskIssueTypes()":  "issues_subtask.json",
+	})
+	src := &realJiraSource{client: srv.Client()}
+	got, err := src.myIssues(t.Context())
+	if err != nil {
+		t.Fatalf("myIssues: %v", err)
+	}
+	if len(*jqls) != 2 {
+		t.Fatalf("jql calls = %d, want 2: %v", len(*jqls), *jqls)
+	}
+	wantStd := `assignee = currentUser() AND issuetype in standardIssueTypes() AND issuetype != Epic AND statusCategory != Done ORDER BY updated DESC`
+	wantSub := `assignee = currentUser() AND issuetype in subTaskIssueTypes() AND statusCategory != Done ORDER BY updated DESC`
+	if (*jqls)[0] != wantStd || (*jqls)[1] != wantSub {
+		t.Errorf("jqls = %q, want [%q %q]", *jqls, wantStd, wantSub)
+	}
+	var keys []string
+	for _, iss := range got {
+		if iss.IssueType == "Epic" {
+			t.Errorf("epic %s leaked into myIssues", iss.Key)
+		}
+		keys = append(keys, iss.Key)
+	}
+	// 7 non-epic rows in the standard fixture, then the sub-task last.
+	if len(got) != 8 || keys[len(keys)-1] != "PROJ-3" {
+		t.Fatalf("keys = %v, want 7 issues then PROJ-3", keys)
+	}
+}
+
+func TestRealJiraSourceRunSearchDecodesTypeAndParent(t *testing.T) {
+	withSignedInCredentials(t)
+	srv, _, _ := laneServer(t, map[string]string{"issuetype in standardIssueTypes()": "issues_standard.json"})
+	src := &realJiraSource{client: srv.Client()}
+	got, err := src.runSearch(t.Context(), "issuetype in standardIssueTypes()", 50)
+	if err != nil {
+		t.Fatalf("runSearch: %v", err)
+	}
+	byKey := map[string]ticketStatus{}
+	for _, iss := range got {
+		byKey[iss.Key] = iss
+	}
+	if g := byKey["TEAM-10"]; g.IssueType != "Task" || g.ParentKey != "TEAM-5" || g.HierarchyLevel != 0 {
+		t.Errorf("TEAM-10 = %+v, want Task with parent TEAM-5", g)
+	}
+	if g := byKey["TEAM-5"]; g.IssueType != "Epic" || g.HierarchyLevel != 1 || g.StatusCategory != "done" {
+		t.Errorf("TEAM-5 = %+v, want done Epic at level 1", g)
+	}
+}
+
+func TestRealJiraSourceSearchDropsUnknownKeys(t *testing.T) {
+	withSignedInCredentials(t)
+	srv, jqls, _ := laneServer(t, map[string]string{"key in": "key_in_mixed.json"})
+	src := &realJiraSource{client: srv.Client()}
+	got, err := src.search(t.Context(), []string{"PR-4567", "PROJ-1"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(got) != 1 || got["PROJ-1"].Key != "PROJ-1" {
+		t.Errorf("got = %v, want only PROJ-1", got)
+	}
+	if strings.Contains((*jqls)[0], "statusCategory") {
+		t.Errorf("search must not filter by status: %q", (*jqls)[0])
+	}
+}
+
+func TestRealJiraSourceSearchChunksKeys(t *testing.T) {
+	withSignedInCredentials(t)
+	srv, jqls, maxes := laneServer(t, nil)
+	src := &realJiraSource{client: srv.Client()}
+	keys := make([]string, 120)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("PROJ-%d", i+1)
+	}
+	if _, err := src.search(t.Context(), keys); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(*jqls) != 3 {
+		t.Fatalf("calls = %d, want 3 (50+50+20)", len(*jqls))
+	}
+	if (*maxes)[0] != 50 || (*maxes)[2] != 20 {
+		t.Errorf("maxResults = %v, want [50 50 20]", *maxes)
 	}
 }

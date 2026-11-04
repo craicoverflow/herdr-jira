@@ -4,7 +4,7 @@
   "issues": [
     {
       "id": "10001",
-      "key": "TICKET-9001",
+      "key": "PROJ-9001",
       "fields": {
         "summary": "Example ticket summary one",
         "issuetype": {
@@ -32,7 +32,7 @@
     },
     {
       "id": "10002",
-      "key": "TICKET-9002",
+      "key": "PROJ-9002",
       "fields": {
         "summary": "Example ticket summary two",
         "issuetype": {
