@@ -176,7 +176,7 @@ type pickerModel struct {
 	// initialKey and noKeyBranch drive the "issue" action: open straight
 	// on this agent's ticket (branch-resolved before the popup started),
 	// or note that the branch had none.
-	initialKey  string
+	initialKeys []string
 	noKeyBranch string
 	notice      string // shown above the list, e.g. "no ticket in branch X"
 
@@ -299,13 +299,14 @@ type (
 )
 
 func newPickerModel(src jiraSource) pickerModel {
-	return newPickerModelFor(src, "", "")
+	return newPickerModelFor(src, nil, "")
 }
 
-// newPickerModelFor backs the "issue" action: initialKey (if set) opens
-// straight on that ticket's detail view; noKeyBranch (if set, and
-// initialKey isn't) notes that the current branch had no parseable key.
-func newPickerModelFor(src jiraSource, initialKey, noKeyBranch string) pickerModel {
+// newPickerModelFor backs the "issue" action: initialKeys (candidates from
+// the branch, in branch order) are confirmed with Jira and the first real
+// one opens straight on that ticket's detail view; noKeyBranch (if set, and
+// none is confirmed) notes that the current branch had no usable key.
+func newPickerModelFor(src jiraSource, initialKeys []string, noKeyBranch string) pickerModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Your Jira issues"
 	l.SetShowHelp(true)
@@ -320,7 +321,7 @@ func newPickerModelFor(src jiraSource, initialKey, noKeyBranch string) pickerMod
 	tl.Title = "Transition to…"
 
 	si := textinput.New()
-	si.Placeholder = "key (e.g. TICKET-1234) or text…"
+	si.Placeholder = "key (e.g. PROJ-1234) or text…"
 	sl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	sl.Title = "Search all issues"
 	sl.SetShowHelp(true)
@@ -344,7 +345,7 @@ func newPickerModelFor(src jiraSource, initialKey, noKeyBranch string) pickerMod
 	sel.StatusMessageLifetime = branchStatusMessageLifetime
 
 	esi := textinput.New()
-	esi.Placeholder = "epic key (e.g. TICKET-1234) or text…"
+	esi.Placeholder = "epic key (e.g. PROJ-1234) or text…"
 	esl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	esl.Title = "Search epics"
 	esl.SetShowHelp(true)
@@ -360,7 +361,7 @@ func newPickerModelFor(src jiraSource, initialKey, noKeyBranch string) pickerMod
 		starredEpicList:   sel,
 		epicSearchInput:   esi,
 		epicSearchList:    esl,
-		initialKey:        initialKey, noKeyBranch: noKeyBranch,
+		initialKeys:       initialKeys, noKeyBranch: noKeyBranch,
 	}
 }
 
@@ -381,31 +382,40 @@ func setTransitionItems(l *list.Model, transitions []transitionOption) {
 }
 
 func (m pickerModel) Init() tea.Cmd {
-	return checkSignInThenStart(m.src, m.initialKey, m.noKeyBranch)
+	return checkSignInThenStart(m.src, m.initialKeys, m.noKeyBranch)
 }
 
 // checkSignInThenStart signs in first if there are no credentials, then
-// either loads this agent's ticket directly (initialKey) or the issue
-// list, noting a keyless branch (noKeyBranch) if that's why there's no
-// initialKey. The popup drives sign-in itself on first use; there is no
+// either loads this agent's ticket directly (the first of initialKeys that
+// Jira confirms) or the issue list, noting a keyless branch (noKeyBranch)
+// if that's why there's no confirmed key. The popup drives sign-in itself on first use; there is no
 // separate login step for the user.
-func checkSignInThenStart(src jiraSource, initialKey, noKeyBranch string) tea.Cmd {
+func checkSignInThenStart(src jiraSource, initialKeys []string, noKeyBranch string) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := loadCredentials(); err != nil {
 			if err := signIn(context.Background()); err != nil {
 				return signedInMsg{err: err}
 			}
 		}
-		if initialKey != "" {
-			detail, err := src.get(context.Background(), initialKey)
-			if err != nil {
-				return initialDetailMsg{key: initialKey, err: err}
+		if len(initialKeys) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), initialLookupTimeout)
+			confirmed, _, err := lookupKeys(ctx, src, initialKeys, false)
+			cancel()
+			if err == nil && len(confirmed) > 0 {
+				detail, err := src.get(context.Background(), confirmed[0])
+				if err != nil {
+					return initialDetailMsg{key: confirmed[0], err: err}
+				}
+				return initialDetailMsg{detail: detail}
 			}
-			return initialDetailMsg{detail: detail}
 		}
 		return initialNoKeyMsg{branch: noKeyBranch}
 	}
 }
+
+// initialLookupTimeout bounds the picker's branch-key confirmation, so a
+// slow Jira falls back to the list instead of a blank popup.
+const initialLookupTimeout = 5 * time.Second
 
 // checkSignInThenLoad signs in first if there are no credentials, then
 // loads the issue list. The popup drives sign-in itself on first use;
@@ -596,7 +606,7 @@ func beginBranch(m pickerModel, key string, from pickerPhase) (pickerModel, tea.
 }
 
 // newBranchSuffixInput's Prompt is the issue key itself, so the box always
-// shows the full branch name ("TICKET-2815-start-spec") as it's typed,
+// shows the full branch name ("PROJ-2815-start-spec") as it's typed,
 // without the model needing to re-render a separate preview line.
 func newBranchSuffixInput(key string) textinput.Model {
 	ti := textinput.New()
@@ -1468,12 +1478,12 @@ func runPicker(ctx context.Context, src jiraSource) error {
 	return err
 }
 
-// runPickerFor is runPicker for the "issue" action: initialKey/noKeyBranch
+// runPickerFor is runPicker for the "issue" action: initialKeys/noKeyBranch
 // come from the invoking space's branch, resolved by the action before the
 // popup started (herdr.go's openPopup env). cwd is that same space's
 // checkout path, used only by the [b] "new branch" shortcut.
-func runPickerFor(ctx context.Context, src jiraSource, initialKey, noKeyBranch, cwd string) error {
-	m := newPickerModelFor(src, initialKey, noKeyBranch)
+func runPickerFor(ctx context.Context, src jiraSource, initialKeys []string, noKeyBranch, cwd string) error {
+	m := newPickerModelFor(src, initialKeys, noKeyBranch)
 	m.cwd = cwd
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err

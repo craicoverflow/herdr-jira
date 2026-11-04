@@ -18,7 +18,7 @@ func newTestPickerModel(t *testing.T, src jiraSource) pickerModel {
 
 func TestPickerModelLoadsIssuesOnSuccess(t *testing.T) {
 	m := newTestPickerModel(t, &fakeJiraSource{})
-	issues := []ticketStatus{{Key: "TICKET-1", StatusName: "Open", Summary: "Widget"}}
+	issues := []ticketStatus{{Key: "PROJ-1", StatusName: "Open", Summary: "Widget"}}
 	next, _ := m.Update(issuesLoadedMsg{issues: issues})
 	pm := next.(pickerModel)
 	if pm.phase != phaseReady {
@@ -60,7 +60,7 @@ func TestPickerModelRetryFromErrorReloads(t *testing.T) {
 func readyWithOneIssue(t *testing.T, src jiraSource) pickerModel {
 	t.Helper()
 	m := newTestPickerModel(t, src)
-	issues := []ticketStatus{{Key: "TICKET-1", StatusName: "Open", Summary: "Widget"}}
+	issues := []ticketStatus{{Key: "PROJ-1", StatusName: "Open", Summary: "Widget"}}
 	next, _ := m.Update(issuesLoadedMsg{issues: issues})
 	return next.(pickerModel)
 }
@@ -77,13 +77,13 @@ func TestPickerModelEnterLoadsDetail(t *testing.T) {
 		t.Fatal("enter must issue a command to load the detail")
 	}
 
-	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "TICKET-1", StatusName: "Open", Summary: "Widget"}})
+	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "PROJ-1", StatusName: "Open", Summary: "Widget"}})
 	pm = next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase after detail loaded = %v, want phaseDetail", pm.phase)
 	}
-	if pm.detail == nil || pm.detail.Key != "TICKET-1" {
-		t.Errorf("detail = %+v, want TICKET-1", pm.detail)
+	if pm.detail == nil || pm.detail.Key != "PROJ-1" {
+		t.Errorf("detail = %+v, want PROJ-1", pm.detail)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestPickerModelEscFromDetailReturnsToList(t *testing.T) {
 	pm := readyWithOneIssue(t, &fakeJiraSource{})
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm = next.(pickerModel)
-	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "TICKET-1"}})
+	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "PROJ-1"}})
 	pm = next.(pickerModel)
 
 	next, _ = pm.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -126,13 +126,13 @@ func TestPickerModelSignInFailureShowsError(t *testing.T) {
 	}
 }
 
-// detailReady returns a model already showing TICKET-1's detail screen.
+// detailReady returns a model already showing PROJ-1's detail screen.
 func detailReady(t *testing.T, src jiraSource) pickerModel {
 	t.Helper()
 	pm := readyWithOneIssue(t, src)
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm = next.(pickerModel)
-	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "TICKET-1", StatusName: "Open"}})
+	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "PROJ-1", StatusName: "Open"}})
 	return next.(pickerModel)
 }
 
@@ -179,7 +179,7 @@ func TestPickerModelSelectingTransitionAppliesIt(t *testing.T) {
 		t.Fatal("selecting a transition must issue a command to apply it")
 	}
 
-	next, _ = pm.Update(transitionAppliedMsg{detail: issueDetail{Key: "TICKET-1", StatusName: "Closed"}})
+	next, _ = pm.Update(transitionAppliedMsg{detail: issueDetail{Key: "PROJ-1", StatusName: "Closed"}})
 	pm = next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase after transition applied = %v, want phaseDetail", pm.phase)
@@ -317,8 +317,8 @@ func TestPickerModelSearchResultEscReturnsToSearchNotMyIssues(t *testing.T) {
 
 func TestPickerModelEKeyLoadsEpicsThenDrillsIntoChildrenThenAssigns(t *testing.T) {
 	src := &fakeJiraSource{
-		myEpicsList:        []ticketStatus{{Key: "TICKET-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"}},
-		epicChildrenResult: []ticketStatus{{Key: "TICKET-3011", StatusName: "In Progress", Summary: "Roll out OIDC to stg"}},
+		myEpicsList:        []ticketStatus{{Key: "PROJ-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"}},
+		epicChildrenResult: []ticketStatus{{Key: "PROJ-3011", StatusName: "In Progress", Summary: "Roll out OIDC to stg"}},
 		accountIDResult:    "account-123",
 	}
 	pm := readyWithOneIssue(t, src)
@@ -350,7 +350,7 @@ func TestPickerModelEKeyLoadsEpicsThenDrillsIntoChildrenThenAssigns(t *testing.T
 		t.Fatal("enter on an epic must issue a command to load its children")
 	}
 
-	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "TICKET-3008", issues: src.epicChildrenResult})
+	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "PROJ-3008", issues: src.epicChildrenResult})
 	pm = next.(pickerModel)
 	if pm.phase != phaseEpicChildren {
 		t.Fatalf("phase after children loaded = %v, want phaseEpicChildren", pm.phase)
@@ -371,7 +371,7 @@ func TestPickerModelEKeyLoadsEpicsThenDrillsIntoChildrenThenAssigns(t *testing.T
 		t.Fatalf("detailReturnPhase = %v, want phaseEpicChildren", pm.detailReturnPhase)
 	}
 
-	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "TICKET-3011", StatusName: "In Progress"}})
+	next, _ = pm.Update(detailLoadedMsg{detail: issueDetail{Key: "PROJ-3011", StatusName: "In Progress"}})
 	pm = next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase after detail loaded = %v, want phaseDetail", pm.phase)
@@ -386,7 +386,7 @@ func TestPickerModelEKeyLoadsEpicsThenDrillsIntoChildrenThenAssigns(t *testing.T
 		t.Fatal("a must issue a command to assign")
 	}
 
-	next, _ = pm.Update(assignAppliedMsg{detail: issueDetail{Key: "TICKET-3011", StatusName: "In Progress", AssigneeName: "Me"}})
+	next, _ = pm.Update(assignAppliedMsg{detail: issueDetail{Key: "PROJ-3011", StatusName: "In Progress", AssigneeName: "Me"}})
 	pm = next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase after assign applied = %v, want phaseDetail", pm.phase)
@@ -408,7 +408,7 @@ func epicsReady(t *testing.T, src jiraSource) pickerModel {
 	pm := readyWithOneIssue(t, src)
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	pm = next.(pickerModel)
-	epics := []ticketStatus{{Key: "TICKET-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"}}
+	epics := []ticketStatus{{Key: "PROJ-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"}}
 	next, _ = pm.Update(epicsLoadedMsg{epics: epics})
 	return next.(pickerModel)
 }
@@ -433,8 +433,8 @@ func TestPickerModelEscFromEpicChildrenReturnsToEpicsNotReady(t *testing.T) {
 	pm := epicsReady(t, &fakeJiraSource{})
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm = next.(pickerModel)
-	children := []ticketStatus{{Key: "TICKET-3011", StatusName: "In Progress"}}
-	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "TICKET-3008", issues: children})
+	children := []ticketStatus{{Key: "PROJ-3011", StatusName: "In Progress"}}
+	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "PROJ-3008", issues: children})
 	pm = next.(pickerModel)
 
 	next, _ = pm.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -454,8 +454,8 @@ func TestPickerModelReloadingEpicChildrenResetsStaleFilter(t *testing.T) {
 	pm := epicsReady(t, &fakeJiraSource{})
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	pm = next.(pickerModel)
-	firstChildren := []ticketStatus{{Key: "TICKET-3011", StatusName: "In Progress", Summary: "Roll out OIDC"}}
-	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "TICKET-3008", issues: firstChildren})
+	firstChildren := []ticketStatus{{Key: "PROJ-3011", StatusName: "In Progress", Summary: "Roll out OIDC"}}
+	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "PROJ-3008", issues: firstChildren})
 	pm = next.(pickerModel)
 
 	// Apply a filter that still matches the first epic's one child, then
@@ -472,8 +472,8 @@ func TestPickerModelReloadingEpicChildrenResetsStaleFilter(t *testing.T) {
 		t.Fatalf("precondition failed: expected the filter to still match the one child")
 	}
 
-	secondChildren := []ticketStatus{{Key: "TICKET-9999", StatusName: "Open", Summary: "Something else"}}
-	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "TICKET-9000", issues: secondChildren})
+	secondChildren := []ticketStatus{{Key: "PROJ-9999", StatusName: "Open", Summary: "Something else"}}
+	next, _ = pm.Update(epicChildrenLoadedMsg{epicKey: "PROJ-9000", issues: secondChildren})
 	pm = next.(pickerModel)
 
 	if len(pm.epicChildrenList.VisibleItems()) != 1 {
@@ -600,8 +600,8 @@ func TestPickerModelStarFromSearchResultsAddsToStarredList(t *testing.T) {
 }
 
 func TestPickerModelStarringOwnEpicFromSearchIsANoop(t *testing.T) {
-	pm := epicsReady(t, &fakeJiraSource{}) // owned epic is TICKET-3008
-	pm = starEpic(t, pm, ticketStatus{Key: "TICKET-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"})
+	pm := epicsReady(t, &fakeJiraSource{}) // owned epic is PROJ-3008
+	pm = starEpic(t, pm, ticketStatus{Key: "PROJ-3008", StatusName: "Backlog", Summary: "Tenant Access Vending"})
 
 	st := readStarState()
 	if len(st.Epics) != 0 {
@@ -673,7 +673,7 @@ func TestPickerModelTypingSInEpicSearchWithoutTabTypesNotStars(t *testing.T) {
 
 func TestPickerModelEnterOnStarredListDrillsIntoStarredEpicNotOwned(t *testing.T) {
 	src := &fakeJiraSource{}
-	pm := epicsReady(t, src) // owned epic is TICKET-3008
+	pm := epicsReady(t, src) // owned epic is PROJ-3008
 	pm = starEpic(t, pm, ticketStatus{Key: "OTHER-1", StatusName: "Open", Summary: "Shared epic"})
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyEsc}) // back to phaseEpics
 	pm = next.(pickerModel)
@@ -702,7 +702,7 @@ func TestPickerModelTabRoutesArrowKeysToTheFocusedListOnly(t *testing.T) {
 	pm := newTestPickerModel(t, src)
 	next, _ := pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	pm = next.(pickerModel)
-	owned := []ticketStatus{{Key: "TICKET-1"}, {Key: "TICKET-2"}}
+	owned := []ticketStatus{{Key: "PROJ-1"}, {Key: "PROJ-2"}}
 	next, _ = pm.Update(epicsLoadedMsg{epics: owned})
 	pm = next.(pickerModel)
 	pm = starEpic(t, pm, ticketStatus{Key: "OTHER-1"})

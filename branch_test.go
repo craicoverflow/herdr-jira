@@ -7,58 +7,58 @@ import (
 	"testing"
 )
 
-func TestExtractKeyDefaultPattern(t *testing.T) {
+func TestCandidateKeys(t *testing.T) {
 	cases := []struct {
-		branch  string
-		wantKey string
-		wantOK  bool
+		name   string
+		branch string
+		want   []string
 	}{
-		// Real patterns sampled in the Task 0b branch audit.
-		{"TICKET-1339", "TICKET-1339", true},
-		{"TICKET-1339-fixes", "TICKET-1339", true},
-		{"TICKET-1339-fixes2", "TICKET-1339", true},
-		{"alice/TICKET-2416-fix-login-bug", "TICKET-2416", true},
-		{"promote/deploy_template-v0-TICKET-2460", "TICKET-2460", true},
-		{"TICKET-553", "TICKET-553", true},
-		{"TICKET-2481-ha-lab-dev-canary", "TICKET-2481", true},
-		// No key.
-		{"fix-tc-template-2", "", false},
-		{"set-timeout-to-60s", "", false},
-		{"main", "", false},
-		{"register-k8lab-2", "", false},
-		// False positives a bare generic regex would catch, that the
-		// TICKET-scoped default must not.
-		{"pr-28069", "", false},
-		{"main-1743", "", false},
-		{"template-2", "", false},
-		// Multiple keys: first match wins.
-		{"TICKET-1-and-TICKET-2", "TICKET-1", true},
+		{"bare key", "PROJ-1339", []string{"PROJ-1339"}},
+		{"key with suffix", "PROJ-1339-fixes", []string{"PROJ-1339"}},
+		{"key after path segment", "alice/PROJ-2416-fix-login-bug", []string{"PROJ-2416"}},
+		{"key at the end", "promote/deploy_template-v0-PROJ-2460", []string{"PROJ-2460"}},
+		{"two keys keep branch order", "PROJ-1-and-OTHER-2", []string{"PROJ-1", "OTHER-2"}},
+		{"duplicate key once", "PROJ-1-then-PROJ-1", []string{"PROJ-1"}},
+		{"lower case is upper-cased", "proj-77-thing", []string{"PROJ-77"}},
+		// Noise the generic pattern also matches; Jira drops these.
+		{"pr number", "pr-4567", []string{"PR-4567"}},
+		{"step counter", "step-2-of-9", []string{"STEP-2", "OF-9"}},
+		{"no match", "main", nil},
+		{"no digits", "set-timeout-to-60s", nil},
 	}
 	for _, c := range cases {
-		t.Run(c.branch, func(t *testing.T) {
-			key, ok := extractKey(c.branch, defaultKeyPattern)
-			if ok != c.wantOK || key != c.wantKey {
-				t.Errorf("extractKey(%q) = (%q, %v), want (%q, %v)", c.branch, key, ok, c.wantKey, c.wantOK)
+		t.Run(c.name, func(t *testing.T) {
+			got := candidateKeys(c.branch)
+			if len(got) != len(c.want) {
+				t.Fatalf("candidateKeys(%q) = %v, want %v", c.branch, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("candidateKeys(%q) = %v, want %v", c.branch, got, c.want)
+				}
 			}
 		})
 	}
 }
 
 func TestExtractKeyCustomPattern(t *testing.T) {
-	// A config override for a different/second project prefix.
-	pattern := `(?i)\b(PROJ-[0-9]+)\b`
-	key, ok := extractKey("feature/PROJ-42-widget", pattern)
-	if !ok || key != "PROJ-42" {
-		t.Errorf("extractKey with custom pattern = (%q, %v), want (PROJ-42, true)", key, ok)
+	pattern := `(?i)\b(ACME-[0-9]+)\b`
+	key, ok := extractKey("feature/acme-42-widget", pattern)
+	if !ok || key != "ACME-42" {
+		t.Errorf("extractKey with custom pattern = (%q, %v), want (ACME-42, true)", key, ok)
 	}
-	// TICKET no longer matches once the pattern is overridden.
-	if _, ok := extractKey("TICKET-1339", pattern); ok {
-		t.Error("extractKey: TICKET branch matched a PROJ-only pattern")
+	// Other projects don't match once the pattern is set.
+	if _, ok := extractKey("PROJ-1339", pattern); ok {
+		t.Error("extractKey: PROJ branch matched an ACME-only pattern")
+	}
+	// Multiple keys: first match wins.
+	if key, _ := extractKey("ACME-1-and-ACME-2", pattern); key != "ACME-1" {
+		t.Errorf("key = %q, want ACME-1", key)
 	}
 }
 
 func TestExtractKeyInvalidPatternReturnsNoKey(t *testing.T) {
-	if _, ok := extractKey("TICKET-1339", `(unclosed`); ok {
+	if _, ok := extractKey("PROJ-1339", `(unclosed`); ok {
 		t.Error("extractKey: expected no match for an invalid regex, got a match")
 	}
 }
@@ -86,13 +86,13 @@ func gitRepo(t *testing.T, branch string) string {
 }
 
 func TestCurrentBranchInRealRepo(t *testing.T) {
-	dir := gitRepo(t, "TICKET-9999-test")
+	dir := gitRepo(t, "PROJ-9999-test")
 	branch, ok := currentBranch(dir)
 	if !ok {
 		t.Fatal("currentBranch: expected ok=true in a real repo")
 	}
-	if branch != "TICKET-9999-test" {
-		t.Errorf("branch = %q, want TICKET-9999-test", branch)
+	if branch != "PROJ-9999-test" {
+		t.Errorf("branch = %q, want PROJ-9999-test", branch)
 	}
 }
 
@@ -117,12 +117,30 @@ func TestCurrentBranchNonGitDirectory(t *testing.T) {
 	}
 }
 
-func TestResolveTicketKeyEndToEnd(t *testing.T) {
-	dir := gitRepo(t, "TICKET-4242-widgets")
-	cfg := withConfigDefaults(config{})
-	key, ok := resolveTicketKey(dir, cfg)
-	if !ok || key != "TICKET-4242" {
-		t.Errorf("resolveTicketKey = (%q, %v), want (TICKET-4242, true)", key, ok)
+func TestResolveTicketKeysAutoReturnsCandidates(t *testing.T) {
+	dir := gitRepo(t, "PROJ-4242-widgets")
+	keys, userPattern := resolveTicketKeys(dir, withConfigDefaults(config{}))
+	if userPattern || len(keys) != 1 || keys[0] != "PROJ-4242" {
+		t.Errorf("resolveTicketKeys = (%v, %v), want ([PROJ-4242], false)", keys, userPattern)
+	}
+}
+
+func TestResolveTicketKeysUserPatternIsUsedAsGiven(t *testing.T) {
+	dir := gitRepo(t, "acme-7-and-PROJ-4242")
+	keys, userPattern := resolveTicketKeys(dir, config{KeyPattern: `(?i)\b(ACME-[0-9]+)\b`})
+	if !userPattern || len(keys) != 1 || keys[0] != "ACME-7" {
+		t.Errorf("resolveTicketKeys = (%v, %v), want ([ACME-7], true)", keys, userPattern)
+	}
+	keys, userPattern = resolveTicketKeys(dir, config{KeyPattern: `(?i)\b(NOPE-[0-9]+)\b`})
+	if !userPattern || len(keys) != 0 {
+		t.Errorf("resolveTicketKeys = (%v, %v), want (none, true)", keys, userPattern)
+	}
+}
+
+func TestResolveTicketKeysNoBranch(t *testing.T) {
+	keys, _ := resolveTicketKeys(t.TempDir(), withConfigDefaults(config{}))
+	if len(keys) != 0 {
+		t.Errorf("keys = %v, want none outside a git repo", keys)
 	}
 }
 
@@ -146,8 +164,8 @@ func TestLoadConfigDefaultsWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.KeyPattern != defaultKeyPattern {
-		t.Errorf("KeyPattern = %q, want default %q", cfg.KeyPattern, defaultKeyPattern)
+	if cfg.KeyPattern != "" {
+		t.Errorf("KeyPattern = %q, want empty (auto)", cfg.KeyPattern)
 	}
 }
 
@@ -169,12 +187,12 @@ func TestSlugifyBranchSuffix(t *testing.T) {
 
 func TestCreateBranchInRealRepo(t *testing.T) {
 	dir := gitRepo(t, "main")
-	name, err := createBranch(dir, "TICKET-2815", "Start Spec")
+	name, err := createBranch(dir, "PROJ-2815", "Start Spec")
 	if err != nil {
 		t.Fatalf("createBranch: %v", err)
 	}
-	if name != "TICKET-2815-start-spec" {
-		t.Errorf("name = %q, want TICKET-2815-start-spec", name)
+	if name != "PROJ-2815-start-spec" {
+		t.Errorf("name = %q, want PROJ-2815-start-spec", name)
 	}
 	branch, ok := currentBranch(dir)
 	if !ok || branch != name {
@@ -183,27 +201,27 @@ func TestCreateBranchInRealRepo(t *testing.T) {
 }
 
 func TestCreateBranchEmptyCwd(t *testing.T) {
-	if _, err := createBranch("", "TICKET-1", "suffix"); err == nil {
+	if _, err := createBranch("", "PROJ-1", "suffix"); err == nil {
 		t.Error("createBranch with no cwd: expected an error")
 	}
 }
 
 func TestCreateBranchEmptySuffix(t *testing.T) {
 	dir := gitRepo(t, "main")
-	if _, err := createBranch(dir, "TICKET-1", "   "); err == nil {
+	if _, err := createBranch(dir, "PROJ-1", "   "); err == nil {
 		t.Error("createBranch with a blank suffix: expected an error")
 	}
 }
 
 func TestCreateBranchAlreadyExists(t *testing.T) {
 	dir := gitRepo(t, "main")
-	if _, err := createBranch(dir, "TICKET-1", "dup"); err != nil {
+	if _, err := createBranch(dir, "PROJ-1", "dup"); err != nil {
 		t.Fatalf("first createBranch: %v", err)
 	}
 	if err := exec.Command("git", "-C", dir, "checkout", "-q", "main").Run(); err != nil {
 		t.Fatalf("checkout back to main: %v", err)
 	}
-	if _, err := createBranch(dir, "TICKET-1", "dup"); err == nil {
+	if _, err := createBranch(dir, "PROJ-1", "dup"); err == nil {
 		t.Error("createBranch: expected an error creating a branch that already exists")
 	}
 }

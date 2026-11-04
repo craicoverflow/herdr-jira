@@ -112,23 +112,78 @@ func tick(ctx context.Context, cfg config, force bool, src jiraSource) error {
 		return err
 	}
 
+	// Resolve each space's branch. With a user key_pattern the key is used
+	// as given; otherwise the branch yields candidates that Jira must
+	// confirm, and all spaces' candidates go in one lookup.
 	spaceKeys := map[string]string{} // workspace id -> ticket key
-	keySet := map[string]bool{}
+	spaceCands := map[string][]string{}
+	var allCands []string
 	for _, w := range workspaces {
 		if w.Worktree == nil || w.Worktree.CheckoutPath == "" {
 			continue
 		}
-		key, ok := resolveTicketKey(w.Worktree.CheckoutPath, cfg)
-		if !ok {
+		keys, userPattern := resolveTicketKeys(w.Worktree.CheckoutPath, cfg)
+		if len(keys) == 0 {
 			continue
 		}
-		spaceKeys[w.WorkspaceID] = key
-		keySet[key] = true
+		if userPattern {
+			spaceKeys[w.WorkspaceID] = keys[0]
+			continue
+		}
+		spaceCands[w.WorkspaceID] = keys
+		allCands = append(allCands, keys...)
+	}
+
+	var searchErr error
+	seeded := map[string]bool{} // keys whose status the lookup just fetched
+	if len(allCands) > 0 {
+		confirmed, statuses, err := lookupKeys(ctx, src, allCands, force)
+		if err != nil {
+			searchErr = err
+			if !isQuietTickErr(err) {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "herdr-jira: tick: ignoring:", err)
+			// Keep showing what we knew: use the first candidate that still
+			// has a cached status.
+			for ws, cands := range spaceCands {
+				for _, c := range cands {
+					if _, ok := st.Cache[c]; ok {
+						spaceKeys[ws] = c
+						break
+					}
+				}
+			}
+		} else {
+			isConfirmed := map[string]bool{}
+			for _, k := range confirmed {
+				isConfirmed[k] = true
+			}
+			for ws, cands := range spaceCands {
+				for _, c := range cands {
+					if isConfirmed[c] {
+						spaceKeys[ws] = c
+						break
+					}
+				}
+			}
+			for k, s := range statuses {
+				st.Cache[k] = cacheEntry{Fetched: now, Status: s}
+				seeded[k] = true
+			}
+		}
+	}
+	keySet := map[string]bool{}
+	for _, k := range spaceKeys {
+		keySet[k] = true
 	}
 
 	fresh := time.Duration(cfg.LabelRefreshSeconds) * time.Second
 	var due []string
 	for key := range keySet {
+		if seeded[key] {
+			continue
+		}
 		e, ok := st.Cache[key]
 		if force || !ok || now.Sub(e.Fetched) >= fresh {
 			due = append(due, key)
@@ -136,7 +191,6 @@ func tick(ctx context.Context, cfg config, force bool, src jiraSource) error {
 	}
 	sort.Strings(due) // deterministic batching
 
-	var searchErr error
 	if len(due) > 0 {
 		found, err := src.search(ctx, due)
 		if err != nil {

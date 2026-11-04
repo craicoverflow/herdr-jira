@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -54,10 +55,15 @@ func run(ctx context.Context, args []string) error {
 		}
 		return nil
 	case "picker":
-		initialKey := os.Getenv("HERDR_JIRA_TICKET_KEY")
+		var initialKeys []string
+		if k := os.Getenv("HERDR_JIRA_TICKET_KEY"); k != "" {
+			initialKeys = []string{k}
+		} else if c := os.Getenv("HERDR_JIRA_TICKET_CANDIDATES"); c != "" {
+			initialKeys = strings.Split(c, ",")
+		}
 		noKeyBranch := os.Getenv("HERDR_JIRA_NO_KEY_BRANCH")
 		cwd := os.Getenv("HERDR_JIRA_CWD")
-		return runPickerFor(ctx, newJiraSource(), initialKey, noKeyBranch, cwd)
+		return runPickerFor(ctx, newJiraSource(), initialKeys, noKeyBranch, cwd)
 	case "action":
 		if len(args) < 2 {
 			return fmt.Errorf("action needs a name")
@@ -103,19 +109,29 @@ func runAction(name string) error {
 }
 
 // issuePopupEnv is the "issue" action's branch resolution, as env vars for
-// the picker process: the ticket key if the current branch has one, or
-// the branch name (for a "no ticket in branch X" notice) if it doesn't —
-// plus cwd itself, so the picker can create a branch (the [b] shortcut)
-// in the right repo regardless of how it was invoked.
+// the picker process. It never calls Jira. With a user key_pattern it sets
+// HERDR_JIRA_TICKET_KEY to the single key. Otherwise it sets
+// HERDR_JIRA_TICKET_CANDIDATES (comma-joined, in branch order) for the
+// picker to confirm with Jira, and HERDR_JIRA_NO_KEY_BRANCH to the branch
+// name for the "no ticket in branch X" notice. It also sets cwd itself, so
+// the picker can create a branch (the [b] shortcut) in the right repo
+// regardless of how it was invoked.
 func issuePopupEnv(cwd string, cfg config) map[string]string {
 	env := map[string]string{}
 	if cwd == "" {
 		return env
 	}
 	env["HERDR_JIRA_CWD"] = cwd
-	if key, ok := resolveTicketKey(cwd, cfg); ok {
-		env["HERDR_JIRA_TICKET_KEY"] = key
-	} else if branch, ok := currentBranch(cwd); ok {
+	keys, userPattern := resolveTicketKeys(cwd, cfg)
+	if userPattern {
+		if len(keys) > 0 {
+			env["HERDR_JIRA_TICKET_KEY"] = keys[0]
+			return env
+		}
+	} else if len(keys) > 0 {
+		env["HERDR_JIRA_TICKET_CANDIDATES"] = strings.Join(keys, ",")
+	}
+	if branch, ok := currentBranch(cwd); ok {
 		env["HERDR_JIRA_NO_KEY_BRANCH"] = branch
 	}
 	return env

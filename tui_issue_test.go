@@ -5,30 +5,30 @@ import (
 	"testing"
 )
 
-func newTestPickerModelFor(t *testing.T, src jiraSource, initialKey, noKeyBranch string) pickerModel {
+func newTestPickerModelFor(t *testing.T, src jiraSource, initialKeys []string, noKeyBranch string) pickerModel {
 	t.Helper()
 	withTempStateDir(t)
 	withTempConfigDir(t)
-	return newPickerModelFor(src, initialKey, noKeyBranch)
+	return newPickerModelFor(src, initialKeys, noKeyBranch)
 }
 
 func TestIssueActionOpensDirectlyOnKeyedTicket(t *testing.T) {
-	src := &fakeJiraSource{getResult: issueDetail{Key: "TICKET-1234", StatusName: "In Progress"}}
-	m := newTestPickerModelFor(t, src, "TICKET-1234", "")
+	src := &fakeJiraSource{getResult: issueDetail{Key: "PROJ-1234", StatusName: "In Progress"}}
+	m := newTestPickerModelFor(t, src, []string{"PROJ-1234"}, "")
 
 	next, _ := m.Update(initialDetailMsg{detail: src.getResult})
 	pm := next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase = %v, want phaseDetail", pm.phase)
 	}
-	if pm.detail == nil || pm.detail.Key != "TICKET-1234" {
-		t.Errorf("detail = %+v, want TICKET-1234", pm.detail)
+	if pm.detail == nil || pm.detail.Key != "PROJ-1234" {
+		t.Errorf("detail = %+v, want PROJ-1234", pm.detail)
 	}
 }
 
 func TestIssueActionNoKeyShowsNoticeAndList(t *testing.T) {
-	src := &fakeJiraSource{myIssuesList: []ticketStatus{{Key: "TICKET-1", StatusName: "Open"}}}
-	m := newTestPickerModelFor(t, src, "", "no-ticket-branch")
+	src := &fakeJiraSource{myIssuesList: []ticketStatus{{Key: "PROJ-1", StatusName: "Open"}}}
+	m := newTestPickerModelFor(t, src, nil, "no-ticket-branch")
 
 	next, cmd := m.Update(initialNoKeyMsg{branch: "no-ticket-branch"})
 	pm := next.(pickerModel)
@@ -47,10 +47,10 @@ func TestIssueActionNoKeyShowsNoticeAndList(t *testing.T) {
 }
 
 func TestIssueActionUnknownKeyFallsBackToListWithNotice(t *testing.T) {
-	src := &fakeJiraSource{myIssuesList: []ticketStatus{{Key: "TICKET-1", StatusName: "Open"}}}
-	m := newTestPickerModelFor(t, src, "TICKET-9999", "")
+	src := &fakeJiraSource{myIssuesList: []ticketStatus{{Key: "PROJ-1", StatusName: "Open"}}}
+	m := newTestPickerModelFor(t, src, []string{"PROJ-9999"}, "")
 
-	next, cmd := m.Update(initialDetailMsg{key: "TICKET-9999", err: errSignedOut})
+	next, cmd := m.Update(initialDetailMsg{key: "PROJ-9999", err: errSignedOut})
 	pm := next.(pickerModel)
 	if pm.notice == "" {
 		t.Fatal("expected a notice about the unresolvable key")
@@ -70,14 +70,14 @@ func TestIssueActionUnknownKeyFallsBackToListWithNotice(t *testing.T) {
 }
 
 func TestIssueActionDetailLoadDoesNotKnockOutBackgroundListLoad(t *testing.T) {
-	src := &fakeJiraSource{getResult: issueDetail{Key: "TICKET-1234", StatusName: "Open"}}
-	m := newTestPickerModelFor(t, src, "TICKET-1234", "")
+	src := &fakeJiraSource{getResult: issueDetail{Key: "PROJ-1234", StatusName: "Open"}}
+	m := newTestPickerModelFor(t, src, []string{"PROJ-1234"}, "")
 	next, _ := m.Update(initialDetailMsg{detail: src.getResult})
 	pm := next.(pickerModel)
 
 	// The background list load lands while still on the detail screen; it
 	// must not knock the user back to the list.
-	next, _ = pm.Update(issuesLoadedMsg{issues: []ticketStatus{{Key: "TICKET-1234"}}})
+	next, _ = pm.Update(issuesLoadedMsg{issues: []ticketStatus{{Key: "PROJ-1234"}}})
 	pm = next.(pickerModel)
 	if pm.phase != phaseDetail {
 		t.Fatalf("phase after background list load = %v, want still phaseDetail", pm.phase)
