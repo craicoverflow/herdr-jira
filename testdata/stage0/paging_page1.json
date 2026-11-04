@@ -1,0 +1,108 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-1",
+      "fields": {
+        "summary": "Task 1",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        }
+      }
+    },
+    {
+      "key": "TEAM-10",
+      "fields": {
+        "summary": "Finalize Documentation for the Project",
+        "status": {
+          "name": "In Review",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-5"
+        }
+      }
+    },
+    {
+      "key": "TEAM-9",
+      "fields": {
+        "summary": "Optimize Performance of the Application",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    },
+    {
+      "key": "TEAM-8",
+      "fields": {
+        "summary": "Develop Transaction History Feature",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    },
+    {
+      "key": "TEAM-7",
+      "fields": {
+        "summary": "Create Wallet Integration",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    }
+  ],
+  "isLast": false,
+  "nextPageToken": "<opaque>"
+}

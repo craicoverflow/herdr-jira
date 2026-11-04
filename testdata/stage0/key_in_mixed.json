@@ -1,0 +1,23 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-1",
+      "fields": {
+        "summary": "Task 1",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        }
+      }
+    }
+  ],
+  "isLast": true
+}
