@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "MCP error -32602: Tool noSuchTool not found"
+    }
+  ],
+  "isError": true
+}

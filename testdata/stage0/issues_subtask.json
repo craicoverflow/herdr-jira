@@ -1,0 +1,23 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-3",
+      "fields": {
+        "summary": "Subtask 2.1",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Subtask",
+          "subtask": true,
+          "hierarchyLevel": -1
+        }
+      }
+    }
+  ],
+  "isLast": true
+}

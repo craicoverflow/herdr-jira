@@ -1,0 +1,236 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-1",
+      "fields": {
+        "summary": "Task 1",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        }
+      }
+    },
+    {
+      "key": "TEAM-10",
+      "fields": {
+        "summary": "Finalize Documentation for the Project",
+        "status": {
+          "name": "In Review",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-5"
+        }
+      }
+    },
+    {
+      "key": "TEAM-9",
+      "fields": {
+        "summary": "Optimize Performance of the Application",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    },
+    {
+      "key": "TEAM-8",
+      "fields": {
+        "summary": "Develop Transaction History Feature",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    },
+    {
+      "key": "TEAM-7",
+      "fields": {
+        "summary": "Create Wallet Integration",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-2"
+        }
+      }
+    },
+    {
+      "key": "TEAM-6",
+      "fields": {
+        "summary": "Set Up Notifications for Users",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Task",
+          "subtask": false,
+          "hierarchyLevel": 0
+        },
+        "parent": {
+          "key": "TEAM-1"
+        }
+      }
+    },
+    {
+      "key": "TEAM-5",
+      "fields": {
+        "summary": "Post-Launch Review and Feedback Collection",
+        "status": {
+          "name": "Done",
+          "statusCategory": {
+            "key": "done",
+            "name": "Done"
+          }
+        },
+        "issuetype": {
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    },
+    {
+      "key": "TEAM-4",
+      "fields": {
+        "summary": "Prepare for Project Launch",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    },
+    {
+      "key": "TEAM-3",
+      "fields": {
+        "summary": "Conduct User Testing for the Platform",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    },
+    {
+      "key": "PROJ-2",
+      "fields": {
+        "summary": "Task 2",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Story",
+          "subtask": false,
+          "hierarchyLevel": 0
+        }
+      }
+    },
+    {
+      "key": "TEAM-2",
+      "fields": {
+        "summary": "Implement Market Analysis Tools",
+        "status": {
+          "name": "In Review",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    },
+    {
+      "key": "TEAM-1",
+      "fields": {
+        "summary": "Implement User Authentication",
+        "status": {
+          "name": "To Do",
+          "statusCategory": {
+            "key": "new",
+            "name": "To Do"
+          }
+        },
+        "issuetype": {
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    }
+  ],
+  "isLast": true
+}
