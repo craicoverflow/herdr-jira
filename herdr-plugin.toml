@@ -2,7 +2,7 @@ id = "herdr-jira"
 name = "Jira"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Your Jira issues in a herdr popup: status, transitions, and a key to this agent's ticket, via a standalone MCP client against mcp.atlassian.com."
+description = "Your Jira issues in a herdr popup: status, transitions, and this agent's ticket in the sidebar, via a standalone MCP client against mcp.atlassian.com. Jira Cloud, one site."
 platforms = ["macos", "linux"]
 
 [[build]]
@@ -16,7 +16,7 @@ command = ["sh", "scripts/build.sh"]
 [[actions]]
 id = "open"
 title = "Jira: your issues"
-description = "Every issue assigned to you, searchable, plus your epics with drill-down; open one to see or change its state."
+description = "Issues assigned to you and your epics, searchable; open one to see or change its state."
 contexts = ["global", "workspace", "pane"]
 command = ["./bin/herdr-jira", "action", "open"]
 
@@ -28,12 +28,12 @@ command = ["./bin/herdr-jira", "action", "open"]
 [[actions]]
 id = "issue"
 title = "Jira: this agent's ticket"
-description = "The ticket keyed in the current branch name, or a picker when none is found."
+description = "The ticket named in the current branch (confirmed with Jira), or your issue list when none is found."
 contexts = ["global", "workspace", "pane"]
 command = ["./bin/herdr-jira", "action", "issue"]
 
 # The picker, opened by the actions above with the invoking space's
-# resolved ticket key (or branch name, if it has none) in its env.
+# candidate ticket keys (or branch name, if it has none) in its env.
 [[panes]]
 id = "picker"
 title = "Jira"
