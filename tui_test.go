@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -916,4 +917,103 @@ func TestLoadEpicsTabSkipsTheLookupWithNoStars(t *testing.T) {
 	if msg := loadEpicsTab(src)().(epicsLoadedMsg); msg.err != errSignedOut {
 		t.Errorf("err = %v, want the starred lookup error", msg.err)
 	}
+}
+
+// ---- cache TTLs -----------------------------------------------------------
+
+func withClock(t *testing.T, now time.Time) {
+	t.Helper()
+	orig := nowFn
+	nowFn = func() time.Time { return now }
+	t.Cleanup(func() { nowFn = orig })
+}
+
+func TestFreshIssuesCacheSkipsTheStartupFetch(t *testing.T) {
+	withTempStateDir(t)
+	withTempConfigDir(t)
+	if err := writePickerCache([]ticketStatus{{Key: "PROJ-1"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	m := newPickerModel(&fakeJiraSource{})
+	_, cmd := send(m, initialNoKeyMsg{})
+	if cmd != nil {
+		t.Error("a fresh Issues cache must not trigger an API fetch")
+	}
+
+	withClock(t, time.Now().Add(issuesCacheTTL+time.Minute))
+	m = newPickerModel(&fakeJiraSource{})
+	_, cmd = send(m, initialNoKeyMsg{})
+	if cmd == nil {
+		t.Error("a stale Issues cache must be refreshed")
+	}
+}
+
+func TestEpicsCacheServesFreshAndRefreshesStale(t *testing.T) {
+	withTempStateDir(t)
+	withTempConfigDir(t)
+	now := time.Now()
+	withClock(t, now)
+	_ = writePickerCache([]ticketStatus{{Key: "PROJ-1"}}, nil)
+	if err := writeEpicsCache(epicsCache{FetchedAt: now.Add(-time.Hour), Epics: []ticketStatus{{Key: "EP-1", IssueType: "Epic"}}, CloudID: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	m := sized(newPickerModel(&fakeJiraSource{}))
+	m, cmd := press(m, "2")
+	if cmd != nil {
+		t.Error("a fresh Epics cache must not trigger an API fetch")
+	}
+	if !strings.Contains(m.View(), "EP-1") {
+		t.Errorf("cached epic not rendered:\n%s", m.View())
+	}
+
+	// Past 3h it still paints, but switching to the tab refetches.
+	withClock(t, now.Add(epicsCacheTTL))
+	m = sized(newPickerModel(&fakeJiraSource{}))
+	m, cmd = press(m, "2")
+	if cmd == nil {
+		t.Error("a stale Epics cache must be refreshed")
+	}
+	if !strings.Contains(m.View(), "EP-1") {
+		t.Errorf("stale cache should still paint:\n%s", m.View())
+	}
+}
+
+func TestRefreshKeyBypassesFreshCaches(t *testing.T) {
+	withTempStateDir(t)
+	withTempConfigDir(t)
+	now := time.Now()
+	withClock(t, now)
+	_ = writePickerCache([]ticketStatus{{Key: "PROJ-1"}}, nil)
+	_ = writeEpicsCache(epicsCache{FetchedAt: now, Epics: []ticketStatus{{Key: "EP-1", IssueType: "Epic"}}})
+	m := sized(newPickerModel(&fakeJiraSource{}))
+	if _, cmd := press(m, "r"); cmd == nil {
+		t.Error("r must refetch Issues even when the cache is fresh")
+	}
+	m, _ = press(m, "2")
+	if _, cmd := press(m, "r"); cmd == nil {
+		t.Error("r must refetch Epics even when the cache is fresh")
+	}
+}
+
+func TestEpicsLoadedWritesCacheAndStarKeepsFetchTime(t *testing.T) {
+	m := sized(newTestPickerModel(t, &fakeJiraSource{}))
+	now := time.Now().Truncate(time.Second)
+	withClock(t, now)
+	m, _ = send(m, issuesLoadedMsg{issues: []ticketStatus{{Key: "PROJ-1"}}})
+	m, _ = send(m, epicsLoadedMsg{epics: []ticketStatus{{Key: "EP-1", IssueType: "Epic"}}, cloudID: "c"})
+	c, ok := readEpicsCache()
+	if !ok || len(c.Epics) != 1 || !c.FetchedAt.Equal(now) {
+		t.Fatalf("cache after load = %+v, %v", c, ok)
+	}
+	withClock(t, now.Add(time.Hour))
+	m, _ = press(m, "2")
+	m, _ = press(m, "s")
+	c, _ = readEpicsCache()
+	if !c.FetchedAt.Equal(now) {
+		t.Errorf("starring changed FetchedAt to %v, want %v", c.FetchedAt, now)
+	}
+	if len(c.StarredKeys) != 1 || c.StarredKeys[0] != "EP-1" {
+		t.Errorf("star not persisted to cache: %+v", c.StarredKeys)
+	}
+	_ = m
 }

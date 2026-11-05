@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,18 +117,23 @@ type pickerModel struct {
 
 	// The tabbed lanes view. data holds what was fetched; buildRows turns it
 	// (plus the filter and search hits) into the rows view displays.
-	tab        tab
-	tabCursor  [2]string // the cursor's issue key per tab, restored on switching back
-	data       laneData
-	view       listView
-	mode       inputMode
-	showHelp   bool
-	status     string // transient one-line message, cleared on the next key
-	cloudID    string // the site the starred epics belong to
-	dirty      bool   // an issue was changed; refresh the tab when returning to it
-	tabLoading [2]bool
-	tabLoaded  [2]bool
-	tabErr     [2]error
+	tab       tab
+	tabCursor [2]string // the cursor's issue key per tab, restored on switching back
+	data      laneData
+	view      listView
+	mode      inputMode
+	showHelp  bool
+	status    string // transient one-line message, cleared on the next key
+	cloudID   string // the site the starred epics belong to
+	// epicsFetchedAt is when the Epics data was last fetched from Jira.
+	epicsFetchedAt time.Time
+	dirty          bool // an issue was changed; refresh the tab when returning to it
+	tabLoading     [2]bool
+	tabLoaded      [2]bool
+	tabErr         [2]error
+	// tabFresh: the tab's data came from a cache still inside its TTL (or a
+	// fetch this session), so opening or switching to it needs no API call.
+	tabFresh [2]bool
 
 	// Search mode: a textinput drives a local filter at once and, after
 	// searchDebounce, one remote search whose hits fill the Results lane.
@@ -297,7 +303,13 @@ func newPickerModelFor(src jiraSource, initialKeys []string, noKeyBranch string)
 	if cached := readPickerCache(); len(cached) > 0 {
 		m.data.Issues, m.data.Subtasks = splitCached(cached)
 		m.tabLoaded[tabIssues] = true
+		m.tabFresh[tabIssues] = issuesCacheFresh()
 		m.phase = phaseReady
+	}
+	if c, ok := readEpicsCache(); ok {
+		m.applyEpics(c)
+		m.tabLoaded[tabEpics] = true
+		m.tabFresh[tabEpics] = c.fresh()
 	}
 	m.rebuild()
 	m.layoutList()
@@ -687,7 +699,7 @@ func (m *pickerModel) switchTab(t tab) tea.Cmd {
 		m.view.selectKey(key)
 	}
 	var cmds []tea.Cmd
-	if !m.tabLoaded[t] && !m.tabLoading[t] {
+	if (!m.tabLoaded[t] || !m.tabFresh[t]) && !m.tabLoading[t] {
 		m.tabLoading[t] = true
 		if t == tabEpics {
 			cmds = append(cmds, loadEpicsTab(m.src))
@@ -743,6 +755,35 @@ func (m *pickerModel) onQueryChanged(inputCmd tea.Cmd) tea.Cmd {
 	return tea.Batch(inputCmd, debounceKeystroke(m.searchSeq, q))
 }
 
+// applyEpics loads an Epics-tab snapshot (fetched or cached) into the model.
+func (m *pickerModel) applyEpics(c epicsCache) {
+	m.cloudID = c.CloudID
+	m.epicsFetchedAt = c.FetchedAt
+	m.data.Epics, m.data.EpicsMore = c.Epics, c.More
+	m.data.Starred = c.Starred
+	m.data.StarredKeys = map[string]bool{}
+	for _, k := range c.StarredKeys {
+		m.data.StarredKeys[k] = true
+	}
+}
+
+// saveEpicsCache persists the current Epics data after a local change (a
+// star toggle), keeping the original fetch time so the TTL isn't extended.
+func (m *pickerModel) saveEpicsCache() {
+	if m.epicsFetchedAt.IsZero() {
+		return // nothing was ever fetched; the star file alone holds the change
+	}
+	keys := make([]string, 0, len(m.data.StarredKeys))
+	for k := range m.data.StarredKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	_ = writeEpicsCache(epicsCache{
+		FetchedAt: m.epicsFetchedAt, Epics: m.data.Epics, More: m.data.EpicsMore,
+		Starred: m.data.Starred, StarredKeys: keys, CloudID: m.cloudID,
+	})
+}
+
 // toggleStarRow stars or unstars the epic under the cursor.
 func (m *pickerModel) toggleStarRow(r row) {
 	starred, err := toggleStar(m.cloudID, r.Issue)
@@ -768,6 +809,7 @@ func (m *pickerModel) toggleStarRow(r row) {
 		m.data.Starred = kept
 		m.status = "Unstarred " + r.Issue.Key
 	}
+	m.saveEpicsCache()
 	m.rebuild()
 }
 
@@ -945,6 +987,9 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.branch != "" {
 			m.notice = "No ticket in branch " + msg.branch + " — showing your issues instead."
 		}
+		if m.tabFresh[tabIssues] {
+			return m, nil
+		}
 		return m, loadIssues(m.src)
 
 	case issuesLoadedMsg:
@@ -962,6 +1007,7 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.tabErr[tabIssues] = nil
 		m.tabLoaded[tabIssues] = true
+		m.tabFresh[tabIssues] = true
 		m.data.Issues, m.data.Subtasks = msg.issues, msg.subtasks
 		m.data.IssuesMore, m.data.SubtasksMore = msg.issuesMore, msg.subtasksMore
 		_ = writePickerCache(msg.issues, msg.subtasks)
@@ -982,13 +1028,14 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.tabErr[tabEpics] = nil
 		m.tabLoaded[tabEpics] = true
-		m.cloudID = msg.cloudID
-		m.data.Epics, m.data.EpicsMore = msg.epics, msg.more
-		m.data.Starred = msg.starred
-		m.data.StarredKeys = map[string]bool{}
-		for _, k := range msg.starredKeys {
-			m.data.StarredKeys[k] = true
+		m.tabFresh[tabEpics] = true
+		c := epicsCache{
+			FetchedAt: nowFn(), Epics: msg.epics, More: msg.more,
+			Starred: msg.starred, StarredKeys: msg.starredKeys, CloudID: msg.cloudID,
 		}
+		m.applyEpics(c)
+		m.epicsFetchedAt = c.FetchedAt
+		_ = writeEpicsCache(c)
 		m.rebuild()
 		return m, nil
 
