@@ -92,8 +92,11 @@ type = "plugin_action"
 command = "herdr-jira.issue"
 ```
 
-- **`open`** — the tabbed popup. The last Issues list is cached, so it paints
-  instantly before refreshing.
+- **`open`** — the tabbed popup. The Issues and Epics lists are cached on disk
+  and paint instantly. Issues are refetched from Jira when the cache is more
+  than 30 minutes old, Epics when it is more than 3 hours old; within those
+  windows opening the popup makes no API call. Press `r` to refresh the
+  current tab on demand.
 - **`issue`** — resolves the current branch to a ticket key, confirms it with
   Jira, and opens straight on its detail screen. No key on the branch, or one
   Jira does not recognise, falls back to the list with a notice.
