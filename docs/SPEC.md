@@ -18,6 +18,13 @@ A herdr plugin with three parts:
 - **A "this agent's ticket" action** (`issue`): the branch's ticket, confirmed
   with Jira, straight to its detail screen.
 
+The same binary also serves **the Herdr app mod** (`app/mods/jira`, see
+[`app/README.md`](../app/README.md)): a gpui-kit dialog or pane that draws the
+same lanes, a detail pane, status changes, assign, stars and Start work, and
+asks the binary for everything Jira through `herdr-jira api <op>` (one JSON
+object per call). `herdr-jira app install` copies the mod, which is built into
+the binary, into the app's folder along with the binary as its helper.
+
 It is a standalone MCP client. On first use it performs OAuth dynamic client
 registration against `mcp.atlassian.com` from the compiled binary, stores its
 own refresh token under `~/.config/herdr/plugins/config/herdr-jira/`, and
@@ -99,10 +106,35 @@ publishes them with `checksums.txt`. `scripts/build.sh` builds from source if
 Go is present, otherwise downloads the binary and installs it only if its
 SHA-256 matches.
 
+### The Herdr app mod
+
+The app runs a mod's programs with a 30-second limit, so `api login` starts a
+detached sign-in worker that records its consent URL and outcome in
+`login.json`, and the mod polls `api session`. Lists use the plugin's caches
+and TTLs (`api issues|epics [--cached|--refresh]`). Changes made through the
+API (`transition`, `assign`, `star`) patch the cached rows in place, keeping
+each cache's fetch time, so the next paint is right without extending the TTL.
+`api tickets --branch …` replaces `tick` for the app: the same candidate-key
+confirmation, with statuses kept in `app_labels.json` so the TUI's `tick`
+(which prunes keys its spaces no longer use) and the app never undo each other.
+Issue details are fetched with `responseContentFormat: markdown`; Jira still
+answers some fields in ADF, which `adf.go` turns into markdown.
+
+`api --demo` (or a `demo` file beside the helper, written by
+`app install --demo`) answers from a pretend site in `demo.go`, in a state
+folder of its own, so the mod can be tried and screenshotted without an
+account and without writing to anyone's Jira.
+
 ## Decision log
 
 Statements below replace earlier ones in this document's history.
 
+- **The app mod reuses this binary rather than re-implementing Jira in
+  JavaScript.** A mod can't run the OAuth loopback callback, and one client
+  keeps one sign-in, one set of caches and one set of stars for both front ends.
+- **No sidebar tokens in the app.** The app's spaces sidebar is Herdr's own
+  mod; instead the mod pins the current space's ticket at the top and marks
+  every row with the spaces working on it.
 - **Superseded: starred Done epics stay visible.** The Epics tab now shows only
   epics that are not Done; a starred epic that finishes disappears.
 - **Superseded: `s` is unbound on owned epics.** `s` works on any epic row.

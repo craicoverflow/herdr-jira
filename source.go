@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -20,6 +21,12 @@ type ticketStatus struct {
 	// HierarchyLevel is Jira's issue type level: 0 standard, -1 sub-task,
 	// 1 and up for Epic and above. 0 when Jira did not report one.
 	HierarchyLevel int
+	// The fields below are only for display (the Herdr app's rows); nothing
+	// decides on them, and caches written before they existed leave them empty.
+	ParentSummary string `json:",omitempty"`
+	Priority      string `json:",omitempty"`
+	AssigneeName  string `json:",omitempty"`
+	Updated       string `json:",omitempty"` // Jira's timestamp, as sent
 }
 
 // issueDetail is the detail screen's view of one issue.
@@ -95,7 +102,7 @@ func newJiraSource() *realJiraSource {
 // category), and issuetype in one call is enough for the sidebar/popup;
 // assignee isn't needed since every ticket shown is already scoped to a
 // branch or to "assigned to me".
-var searchFields = []string{"summary", "status", "issuetype", "parent"}
+var searchFields = []string{"summary", "status", "issuetype", "parent", "priority", "assignee", "updated"}
 
 func (s *realJiraSource) search(ctx context.Context, keys []string) (map[string]ticketStatus, error) {
 	if len(keys) == 0 {
@@ -426,8 +433,18 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 					HierarchyLevel int    `json:"hierarchyLevel"`
 				} `json:"issuetype"`
 				Parent struct {
-					Key string `json:"key"`
+					Key    string `json:"key"`
+					Fields struct {
+						Summary string `json:"summary"`
+					} `json:"fields"`
 				} `json:"parent"`
+				Priority struct {
+					Name string `json:"name"`
+				} `json:"priority"`
+				Assignee struct {
+					DisplayName string `json:"displayName"`
+				} `json:"assignee"`
+				Updated string `json:"updated"`
 			} `json:"fields"`
 		} `json:"issues"`
 	}
@@ -444,7 +461,195 @@ func (s *realJiraSource) runSearch(ctx context.Context, jql string, maxResults i
 			IssueType:      iss.Fields.IssueType.Name,
 			ParentKey:      iss.Fields.Parent.Key,
 			HierarchyLevel: iss.Fields.IssueType.HierarchyLevel,
+			ParentSummary:  iss.Fields.Parent.Fields.Summary,
+			Priority:       iss.Fields.Priority.Name,
+			AssigneeName:   iss.Fields.Assignee.DisplayName,
+			Updated:        iss.Fields.Updated,
 		})
 	}
 	return out, result.IsLast != nil && !*result.IsLast, nil
+}
+
+// issueFull is the Herdr app's detail view of one issue: everything the
+// detail pane shows, with the description and comments as markdown.
+type issueFull struct {
+	Key               string
+	Summary           string
+	StatusName        string
+	StatusCategory    string
+	IssueType         string
+	HierarchyLevel    int
+	Priority          string
+	AssigneeName      string
+	AssigneeAccountID string
+	ReporterName      string
+	Created           string
+	Updated           string
+	Labels            []string
+	ProjectKey        string
+	ProjectName       string
+	ParentKey         string
+	ParentSummary     string
+	ParentType        string
+	Description       string
+	Subtasks          []ticketStatus
+	Comments          []issueComment
+	URL               string
+}
+
+// issueComment is one comment, its body as markdown.
+type issueComment struct {
+	Author  string
+	Created string
+	Body    string
+}
+
+// fullFields is what the detail pane asks getJiraIssue for.
+var fullFields = []string{"summary", "status", "issuetype", "priority", "assignee", "reporter", "created", "updated", "labels", "parent", "description", "subtasks", "comment", "project"}
+
+// maxComments is how many of the latest comments the detail pane shows.
+const maxComments = 5
+
+type jiraStatusJSON struct {
+	Name           string `json:"name"`
+	StatusCategory struct {
+		Key string `json:"key"`
+	} `json:"statusCategory"`
+}
+
+// getFull is get for the Herdr app: the whole issue, its description and
+// latest comments as markdown (richTextMarkdown accepts either format back).
+func (s *realJiraSource) getFull(ctx context.Context, key string) (issueFull, error) {
+	cloudID, err := ensureCloudID(ctx, s.client)
+	if err != nil {
+		return issueFull{}, err
+	}
+	raw, err := callTool(ctx, s.client, "getJiraIssue", map[string]any{
+		"cloudId":               cloudID,
+		"issueIdOrKey":          key,
+		"fields":                fullFields,
+		"responseContentFormat": "markdown",
+	})
+	if err != nil {
+		return issueFull{}, fmt.Errorf("get %s: %w", key, err)
+	}
+	full, err := decodeIssueFull(raw)
+	if err != nil {
+		return issueFull{}, err
+	}
+	if creds, err := loadCredentials(); err == nil && creds.SiteURL != "" {
+		full.URL = creds.SiteURL + "/browse/" + full.Key
+	}
+	return full, nil
+}
+
+// decodeIssueFull decodes a getJiraIssue result into issueFull.
+func decodeIssueFull(raw json.RawMessage) (issueFull, error) {
+	type person struct {
+		DisplayName string `json:"displayName"`
+		AccountID   string `json:"accountId"`
+	}
+	type issueType struct {
+		Name           string `json:"name"`
+		HierarchyLevel int    `json:"hierarchyLevel"`
+	}
+	var result struct {
+		Key    string `json:"key"`
+		Fields struct {
+			Summary     string                 `json:"summary"`
+			Status      jiraStatusJSON         `json:"status"`
+			IssueType   issueType              `json:"issuetype"`
+			Priority    *struct{ Name string } `json:"priority"`
+			Assignee    *person                `json:"assignee"`
+			Reporter    *person                `json:"reporter"`
+			Created     string                 `json:"created"`
+			Updated     string                 `json:"updated"`
+			Labels      []string               `json:"labels"`
+			Description json.RawMessage        `json:"description"`
+			Project     struct {
+				Key  string `json:"key"`
+				Name string `json:"name"`
+			} `json:"project"`
+			Parent *struct {
+				Key    string `json:"key"`
+				Fields struct {
+					Summary   string    `json:"summary"`
+					IssueType issueType `json:"issuetype"`
+				} `json:"fields"`
+			} `json:"parent"`
+			Subtasks []struct {
+				Key    string `json:"key"`
+				Fields struct {
+					Summary   string                 `json:"summary"`
+					Status    jiraStatusJSON         `json:"status"`
+					IssueType issueType              `json:"issuetype"`
+					Priority  *struct{ Name string } `json:"priority"`
+				} `json:"fields"`
+			} `json:"subtasks"`
+			Comment struct {
+				Comments []struct {
+					Author  *person         `json:"author"`
+					Created string          `json:"created"`
+					Body    json.RawMessage `json:"body"`
+				} `json:"comments"`
+			} `json:"comment"`
+		} `json:"fields"`
+	}
+	if err := decodeToolResultText(raw, &result); err != nil {
+		return issueFull{}, err
+	}
+	f := result.Fields
+	out := issueFull{
+		Key:            result.Key,
+		Summary:        f.Summary,
+		StatusName:     f.Status.Name,
+		StatusCategory: f.Status.StatusCategory.Key,
+		IssueType:      f.IssueType.Name,
+		HierarchyLevel: f.IssueType.HierarchyLevel,
+		Created:        f.Created,
+		Updated:        f.Updated,
+		Labels:         f.Labels,
+		ProjectKey:     f.Project.Key,
+		ProjectName:    f.Project.Name,
+		Description:    richTextMarkdown(f.Description),
+	}
+	if f.Priority != nil {
+		out.Priority = f.Priority.Name
+	}
+	if f.Assignee != nil {
+		out.AssigneeName, out.AssigneeAccountID = f.Assignee.DisplayName, f.Assignee.AccountID
+	}
+	if f.Reporter != nil {
+		out.ReporterName = f.Reporter.DisplayName
+	}
+	if f.Parent != nil {
+		out.ParentKey, out.ParentSummary, out.ParentType = f.Parent.Key, f.Parent.Fields.Summary, f.Parent.Fields.IssueType.Name
+	}
+	for _, st := range f.Subtasks {
+		t := ticketStatus{
+			Key:            st.Key,
+			Summary:        st.Fields.Summary,
+			StatusName:     st.Fields.Status.Name,
+			StatusCategory: st.Fields.Status.StatusCategory.Key,
+			IssueType:      st.Fields.IssueType.Name,
+			HierarchyLevel: st.Fields.IssueType.HierarchyLevel,
+			ParentKey:      result.Key,
+		}
+		if st.Fields.Priority != nil {
+			t.Priority = st.Fields.Priority.Name
+		}
+		out.Subtasks = append(out.Subtasks, t)
+	}
+	comments := f.Comment.Comments
+	if len(comments) > maxComments {
+		comments = comments[len(comments)-maxComments:]
+	}
+	for _, c := range comments {
+		ic := issueComment{Created: c.Created, Body: richTextMarkdown(c.Body)}
+		if c.Author != nil {
+			ic.Author = c.Author.DisplayName
+		}
+		out.Comments = append(out.Comments, ic)
+	}
+	return out, nil
 }

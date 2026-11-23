@@ -1,0 +1,5 @@
+{
+  "global": {
+    "cmd-j": "mod.open:jira"
+  }
+}
