@@ -16,6 +16,23 @@ const signInTimeout = 3 * time.Minute
 // and exact-matches whatever redirect URI is requested, so there is no need
 // to pre-register or reuse a fixed port across logins).
 func signIn(ctx context.Context) error {
+	if err := signInWith(ctx, func(authURL string) {
+		fmt.Println("Opening your browser to sign in to Jira…")
+		fmt.Println(authURL)
+		if err := openBrowser(authURL); err != nil {
+			fmt.Println("Couldn't open a browser automatically; open the URL above by hand.")
+		}
+		fmt.Println("Waiting for you to approve in the browser…")
+	}); err != nil {
+		return err
+	}
+	fmt.Println("Signed in.")
+	return nil
+}
+
+// signInWith is signIn with the consent URL handed to show (which opens it)
+// instead of printed, so the Herdr app's background sign-in can record it.
+func signInWith(ctx context.Context, show func(authURL string)) error {
 	ln, err := listenLoopback()
 	if err != nil {
 		return fmt.Errorf("sign in: open loopback listener: %w", err)
@@ -40,15 +57,10 @@ func signIn(ctx context.Context) error {
 	}
 
 	authURL := buildAuthorizeURL(clientID, redirectURI, state, pair.Challenge)
-	fmt.Println("Opening your browser to sign in to Jira…")
-	fmt.Println(authURL)
-	if err := openBrowser(authURL); err != nil {
-		fmt.Println("Couldn't open a browser automatically; open the URL above by hand.")
-	}
+	show(authURL)
 
 	waitCtx, cancel := context.WithTimeout(ctx, signInTimeout)
 	defer cancel()
-	fmt.Println("Waiting for you to approve in the browser…")
 	result, err := waitForCallback(waitCtx, ln, state)
 	if err != nil {
 		return fmt.Errorf("sign in: %w", err)
@@ -67,6 +79,5 @@ func signIn(ctx context.Context) error {
 	if _, err := ensureCloudID(ctx, client); err != nil {
 		return fmt.Errorf("sign in: %w", err)
 	}
-	fmt.Println("Signed in.")
 	return nil
 }

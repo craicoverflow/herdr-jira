@@ -23,6 +23,9 @@ const usage = `herdr-jira — Jira issues in herdr
                    herdr runs this on its events
   action NAME      what a herdr action runs: open, issue
   picker           the popup itself
+  api OP [ARGS]    the JSON interface the Herdr app mod uses (one JSON
+                   object out, see api.go)
+  app install      install the Herdr app mod (see app/README.md)
 `
 
 func main() {
@@ -64,6 +67,10 @@ func run(ctx context.Context, args []string) error {
 		noKeyBranch := os.Getenv("HERDR_JIRA_NO_KEY_BRANCH")
 		cwd := os.Getenv("HERDR_JIRA_CWD")
 		return runPickerFor(ctx, newJiraSource(), initialKeys, noKeyBranch, cwd)
+	case "api":
+		return runAPICommand(ctx, args[1:], os.Stdout)
+	case "app":
+		return runApp(args[1:])
 	case "action":
 		if len(args) < 2 {
 			return fmt.Errorf("action needs a name")

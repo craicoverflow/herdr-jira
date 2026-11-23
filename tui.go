@@ -195,6 +195,7 @@ type (
 	issuesLoadedMsg struct {
 		issues, subtasks         []ticketStatus
 		issuesMore, subtasksMore bool
+		started                  time.Time // when the fetch began
 		err                      error
 	}
 	// epicsLoadedMsg carries the Epics tab: assigned epics, plus the starred
@@ -205,6 +206,7 @@ type (
 		starred     []ticketStatus
 		starredKeys []string
 		cloudID     string
+		started     time.Time // when the fetch began
 		err         error
 	}
 	signedInMsg      struct{ err error }
@@ -300,10 +302,10 @@ func newPickerModelFor(src jiraSource, initialKeys []string, noKeyBranch string)
 		detailReturnPhase: phaseReady,
 		initialKeys:       initialKeys, noKeyBranch: noKeyBranch,
 	}
-	if cached := readPickerCache(); len(cached) > 0 {
-		m.data.Issues, m.data.Subtasks = splitCached(cached)
+	if c, ok := readIssuesCache(); ok && len(c.Rows) > 0 && sameSite(c.CloudID, cloudIDFn()) {
+		m.data.Issues, m.data.Subtasks = splitCached(c.Rows)
 		m.tabLoaded[tabIssues] = true
-		m.tabFresh[tabIssues] = issuesCacheFresh()
+		m.tabFresh[tabIssues] = c.fresh()
 		m.phase = phaseReady
 	}
 	if c, ok := readEpicsCache(); ok {
@@ -383,8 +385,9 @@ func checkSignInThenLoad(src jiraSource) tea.Cmd {
 }
 
 func fetchIssues(src jiraSource) issuesLoadedMsg {
+	started := nowFn()
 	issues, subtasks, issuesMore, subtasksMore, err := src.myIssues(context.Background())
-	return issuesLoadedMsg{issues: issues, subtasks: subtasks, issuesMore: issuesMore, subtasksMore: subtasksMore, err: err}
+	return issuesLoadedMsg{issues: issues, subtasks: subtasks, issuesMore: issuesMore, subtasksMore: subtasksMore, started: started, err: err}
 }
 
 func loadIssues(src jiraSource) tea.Cmd {
@@ -397,6 +400,7 @@ func loadIssues(src jiraSource) tea.Cmd {
 func loadEpicsTab(src jiraSource) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
+		started := nowFn()
 		epics, more, err := src.myEpics(ctx)
 		if err != nil {
 			return epicsLoadedMsg{err: err}
@@ -415,7 +419,7 @@ func loadEpicsTab(src jiraSource) tea.Cmd {
 				}
 			}
 		}
-		return epicsLoadedMsg{epics: epics, more: more, starred: starred, starredKeys: keys, cloudID: cloudID}
+		return epicsLoadedMsg{epics: epics, more: more, starred: starred, starredKeys: keys, cloudID: cloudID, started: started}
 	}
 }
 
@@ -767,8 +771,10 @@ func (m *pickerModel) applyEpics(c epicsCache) {
 	}
 }
 
-// saveEpicsCache persists the current Epics data after a local change (a
-// star toggle), keeping the original fetch time so the TTL isn't extended.
+// saveEpicsCache saves the starred epics into the cached Epics tab after a
+// local change (a star toggle). Only the starred lane is written, so the
+// cache keeps its fetch time (the TTL isn't extended) and any change the app
+// made to the assigned lane meanwhile.
 func (m *pickerModel) saveEpicsCache() {
 	if m.epicsFetchedAt.IsZero() {
 		return // nothing was ever fetched; the star file alone holds the change
@@ -778,9 +784,9 @@ func (m *pickerModel) saveEpicsCache() {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	_ = writeEpicsCache(epicsCache{
-		FetchedAt: m.epicsFetchedAt, Epics: m.data.Epics, More: m.data.EpicsMore,
-		Starred: m.data.Starred, StarredKeys: keys, CloudID: m.cloudID,
+	updateEpicsCache(m.cloudID, func(c *epicsCache) bool {
+		c.Starred, c.StarredKeys = m.data.Starred, keys
+		return true
 	})
 }
 
@@ -1008,9 +1014,9 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tabErr[tabIssues] = nil
 		m.tabLoaded[tabIssues] = true
 		m.tabFresh[tabIssues] = true
-		m.data.Issues, m.data.Subtasks = msg.issues, msg.subtasks
+		// The app may have changed an issue while this fetch ran.
+		m.data.Issues, m.data.Subtasks = storeFetchedIssues(msg.started, msg.issues, msg.subtasks)
 		m.data.IssuesMore, m.data.SubtasksMore = msg.issuesMore, msg.subtasksMore
-		_ = writePickerCache(msg.issues, msg.subtasks)
 		if m.phase == phaseLoading {
 			m.phase = phaseReady
 		}
@@ -1029,13 +1035,13 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tabErr[tabEpics] = nil
 		m.tabLoaded[tabEpics] = true
 		m.tabFresh[tabEpics] = true
-		c := epicsCache{
+		// The app may have changed an epic while this fetch ran.
+		c := storeFetchedEpics(msg.started, epicsCache{
 			FetchedAt: nowFn(), Epics: msg.epics, More: msg.more,
 			Starred: msg.starred, StarredKeys: msg.starredKeys, CloudID: msg.cloudID,
-		}
+		})
 		m.applyEpics(c)
 		m.epicsFetchedAt = c.FetchedAt
-		_ = writeEpicsCache(c)
 		m.rebuild()
 		return m, nil
 

@@ -1,0 +1,6 @@
+{
+  "place": "none",
+  "title": "Jira",
+  "focusable": true,
+  "overlay": { "kind": "dialog", "width": 1080, "height": 0.86 }
+}

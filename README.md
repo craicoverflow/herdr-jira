@@ -13,6 +13,20 @@ in the path, so no token cost regardless of call volume. See
 assigns issues to you, when you ask it to. Starring an epic is local to the
 plugin and writes nothing to Jira.
 
+## Using the Herdr app?
+
+The same Jira view, rebuilt for the [Herdr app](https://herdr.dev): a dialog
+(or a pane beside your terminals) with your issues and epics, a detail pane
+with the description and comments, live status changes, and **Start work**,
+which makes a worktree space for the issue and can start an agent on it. It
+shares this plugin's sign-in, caches and stars. See [`app/README.md`](app/README.md):
+
+```sh
+sh scripts/build.sh && ./bin/herdr-jira app install   # then press cmd-j in Herdr
+```
+
+![Jira in the Herdr app](app/preview.png)
+
 ## Features
 
 - **Two tabs, one scrolling list each.** **Issues** and **Epics**, each
