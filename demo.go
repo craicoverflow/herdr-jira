@@ -203,7 +203,7 @@ func (d demoSource) get(_ context.Context, key string) (issueDetail, error) {
 		acct = demoAccountID
 	}
 	return issueDetail{Key: is.Key, Summary: is.Summary, StatusName: is.Status, StatusCategory: demoCategory(is.Status),
-		AssigneeName: is.Assignee, AssigneeAccountID: acct, URL: demoSiteURL + "/browse/" + is.Key}, nil
+		IssueType: is.Type, AssigneeName: is.Assignee, AssigneeAccountID: acct, URL: demoSiteURL + "/browse/" + is.Key}, nil
 }
 
 func (d demoSource) getFull(_ context.Context, key string) (issueFull, error) {

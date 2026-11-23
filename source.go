@@ -35,6 +35,7 @@ type issueDetail struct {
 	Summary        string
 	StatusName     string
 	StatusCategory string
+	IssueType      string
 	AssigneeName   string
 	// AssigneeAccountID is "" when unassigned, so it can be compared
 	// directly against accountID()'s result to answer "is this assigned
@@ -44,8 +45,9 @@ type issueDetail struct {
 }
 
 // transitionOption is one entry from getTransitionsForJiraIssue. Workflow
-// transitions are project/board-specific, so this always comes from a
-// live call — never hardcoded (the plan's hard rule).
+// transitions are project/board-specific, so this always comes from Jira —
+// never hardcoded (the plan's hard rule) — though transitioncache.go keeps
+// each workflow step's list for a day.
 type transitionOption struct {
 	ID               string
 	Name             string
@@ -254,6 +256,9 @@ func (s *realJiraSource) get(ctx context.Context, key string) (issueDetail, erro
 					Key string `json:"key"`
 				} `json:"statusCategory"`
 			} `json:"status"`
+			IssueType struct {
+				Name string `json:"name"`
+			} `json:"issuetype"`
 			Assignee struct {
 				DisplayName string `json:"displayName"`
 				AccountID   string `json:"accountId"`
@@ -268,6 +273,7 @@ func (s *realJiraSource) get(ctx context.Context, key string) (issueDetail, erro
 		Summary:           result.Fields.Summary,
 		StatusName:        result.Fields.Status.Name,
 		StatusCategory:    result.Fields.Status.StatusCategory.Key,
+		IssueType:         result.Fields.IssueType.Name,
 		AssigneeName:      result.Fields.Assignee.DisplayName,
 		AssigneeAccountID: result.Fields.Assignee.AccountID,
 	}

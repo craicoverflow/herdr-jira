@@ -534,3 +534,29 @@ func TestRealJiraSourceSearchChunksKeys(t *testing.T) {
 		t.Errorf("maxResults = %v, want [50 50 20]", *maxes)
 	}
 }
+
+func TestTransitionsForRealSourceFilesTheStepAndAnswersOffline(t *testing.T) {
+	withSignedInCredentials(t)
+	withTempStateDir(t)
+	srv := newFakeMCPServer(t, map[string]string{
+		"getJiraIssue":               `{"key":"PROJ-9001","fields":{"summary":"S","status":{"name":"To Do","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"}}}`,
+		"getTransitionsForJiraIssue": fixtureText(t, "transitions_response.json"),
+	})
+	orig := mcpEndpoint
+	mcpEndpoint = srv.URL
+	defer func() { mcpEndpoint = orig }()
+
+	src := &realJiraSource{client: srv.Client()}
+	d, err := src.get(t.Context(), "PROJ-9001")
+	if err != nil || d.IssueType != "Task" {
+		t.Fatalf("get reads the issue type: %+v %v", d, err)
+	}
+	if got, err := transitionsFor(t.Context(), src, "PROJ-9001", "", "", false); err != nil || len(got) != 4 {
+		t.Fatalf("transitionsFor: %d %v", len(got), err)
+	}
+	srv.Close() // from here a call to Jira would fail
+	got, err := transitionsFor(t.Context(), src, "PROJ-9002", "Task", "To Do", false)
+	if err != nil || len(got) != 4 || got[2].Name != "Closed" {
+		t.Fatalf("a cached step needs no call: %+v %v", got, err)
+	}
+}

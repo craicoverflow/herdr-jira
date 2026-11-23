@@ -1018,3 +1018,34 @@ func TestEpicsLoadedWritesCacheAndStarKeepsFetchTime(t *testing.T) {
 	}
 	_ = m
 }
+
+func TestPickerModelTransitionsComeFromTheCacheAndRRefetches(t *testing.T) {
+	src := sourceAt("PROJ-1", "Task", "Open", toDoMoves)
+	pm := readyWithOneIssue(t, src)
+	withAPIState(t)
+	pm, _ = press(pm, "enter")
+	pm, _ = send(pm, detailLoadedMsg{detail: issueDetail{Key: "PROJ-1", IssueType: "Task", StatusName: "Open"}})
+	for i := 0; i < 2; i++ {
+		var cmd tea.Cmd
+		pm, cmd = press(pm, "t")
+		pm, _ = send(pm, cmd())
+		if pm.phase != phaseTransitions || len(pm.transitionList.Items()) != 1 {
+			t.Fatalf("open %d: phase %v, %d items", i, pm.phase, len(pm.transitionList.Items()))
+		}
+		pm, _ = press(pm, "esc")
+	}
+	if src.transitionsCalls != 1 {
+		t.Fatalf("the second look at the same step is served from the cache: %d calls", src.transitionsCalls)
+	}
+
+	pm, cmd := press(pm, "t")
+	pm, _ = send(pm, cmd())
+	pm, cmd = press(pm, "r")
+	if pm.phase != phaseTransitionsLoading || cmd == nil {
+		t.Fatalf("r in the transition list refetches: phase %v, cmd nil %v", pm.phase, cmd == nil)
+	}
+	pm, _ = send(pm, cmd())
+	if src.transitionsCalls != 2 || pm.phase != phaseTransitions {
+		t.Fatalf("after r: %d calls, phase %v", src.transitionsCalls, pm.phase)
+	}
+}

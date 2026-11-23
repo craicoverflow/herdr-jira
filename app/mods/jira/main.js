@@ -61,7 +61,8 @@ export default class Jira extends View {
 
     this.details = new Map(); // key -> { data, loading, error, at }
     this.children = new Map(); // epic key -> { list, loading, error }
-    this.transitions = new Map(); // key -> { list, loading, error }
+    this.transitions = new Map(); // key -> { list, status, loading, error }
+    this.staleTransitions = new Set(); // keys whose next transitions load asks Jira
     this.busy = new Map(); // key -> what's running ("status", "assign", "star")
     this.menu = null; // { key, at } while the status menu is open
     this.sheet = null; // { kind: "start" | "help", ... }
@@ -183,7 +184,10 @@ export default class Jira extends View {
     this.ticketsKey = null;
     this.resolveTickets(cx, true);
     const key = this.current()?.key;
-    if (key) this.loadDetail(key, cx);
+    if (key) {
+      this.loadDetail(key, cx);
+      this.staleTransitions.add(key);
+    }
   }
 
   tick(cx) {
@@ -227,6 +231,8 @@ export default class Jira extends View {
       if (r.ok) {
         this.details.set(key, { data: r.data, at: Date.now(), loading: false });
         if (r.data.level > 0 && !this.children.has(key)) this.loadChildren(key, cx);
+        // The menu may have opened on a list row's older status.
+        if (this.menu?.key === key || this.sheet?.issue?.key === key) this.loadTransitions(key, cx);
       } else {
         this.details.set(key, { ...this.details.get(key), loading: false, error: r.error, failedAt: Date.now() });
         this.authFailed(r.error);
@@ -264,15 +270,24 @@ export default class Jira extends View {
     });
   }
 
-  loadTransitions(key, cx) {
+  // The helper keeps each workflow step's transitions (project, issue type,
+  // status) for a day, so it answers from disk when told the step: the
+  // issue's detail when loaded, else its row. A list loaded for another
+  // status than the issue has now is loaded again.
+  loadTransitions(key, cx, issue = null) {
+    const row = issue?.key === key ? issue : this.current();
+    const at = this.details.get(key)?.data ?? (row?.key === key ? row : null);
     const tr = this.transitions.get(key);
-    if (tr?.loading || tr?.list) return;
+    const force = this.staleTransitions.has(key);
+    if (tr?.loading || (tr?.list && !force && tr.status === at?.status)) return;
+    this.staleTransitions.delete(key);
     this.transitions.set(key, { loading: true });
+    const hints = this.session?.api >= 2 ? [at?.type && `--type=${at.type}`, at?.status && `--status=${at.status}`].filter(Boolean) : [];
     const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
-      const r = await api("transitions", key);
+      const r = await api("transitions", key, ...hints, ...(force ? ["--refresh"] : []));
       if (!this.gen.same("session", session)) return;
-      this.transitions.set(key, r.ok ? { list: r.data.transitions } : { error: r.error });
+      this.transitions.set(key, r.ok ? { list: r.data.transitions, status: at?.status } : { error: r.error });
       if (!r.ok) this.authFailed(r.error);
       cx.notify();
     });
@@ -327,7 +342,7 @@ export default class Jira extends View {
             this.gen.bump("session");
             this.loading = { issues: false, epics: false };
             this.data = { issues: null, epics: null };
-            this.details.clear();
+            this.details.clear(); this.transitions.clear();
             this.loadAll(cx);
             this.say(`Signed in to ${this.siteHost()}`, "success", cx);
           }
@@ -347,7 +362,7 @@ export default class Jira extends View {
         this.session = { signedIn: false };
         this.loading = { issues: false, epics: false };
         this.data = { issues: null, epics: null };
-        this.details.clear(); this.children.clear(); this.transitions.clear();
+        this.details.clear(); this.children.clear(); this.transitions.clear(); this.staleTransitions.clear();
         this.tickets = {}; this.me = null; this.pinned = null; this.sheet = null;
       } else this.say(r.error.message, "error", cx);
       cx.notify();
@@ -566,6 +581,7 @@ export default class Jira extends View {
       const r = await api("transition", key, tr.id);
       this.busy.delete(key);
       if (!r.ok) {
+        this.transitions.delete(key); // the helper forgot the list that offered it
         if (!this.authFailed(r.error)) this.say(`Couldn't move ${key}: ${r.error.message}`, "error", cx);
       } else {
         this.applyIssue(r.data.issue ?? { key, status: tr.to, category: tr.category });
@@ -701,7 +717,7 @@ export default class Jira extends View {
     this.sheet = sheet;
     this.menu = null;
     cx.timer.after(60, () => sheet.input.focus());
-    this.loadTransitions(issue.key, cx);
+    this.loadTransitions(issue.key, cx, issue);
     if (!d) this.wantDetail(issue.key, cx);
     cx.spawn(async (cx) => {
       try {
@@ -774,7 +790,7 @@ export default class Jira extends View {
       if (tr) {
         const r = await api("transition", issue.key, tr.id);
         if (r.ok) { this.applyIssue(r.data.issue ?? { key: issue.key, status: tr.to, category: tr.category }); this.transitions.delete(issue.key); did.push(`moved to ${tr.to}`); }
-        else did.push(`not moved (${r.error.message})`);
+        else { this.transitions.delete(issue.key); did.push(`not moved (${r.error.message})`); }
       }
       this.sheet = null;
       const text = `${issue.key}: ${did.join(", ")}`;
@@ -1282,7 +1298,7 @@ export default class Jira extends View {
   helpSheet(t, card) {
     const keys = [
       ["↑ ↓  j k", "move through the list"], ["⏎", "open (an epic lists its children)"], ["/", "search: filters at once, then asks Jira"],
-      ["t", "change status (the issue's live transitions)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"],
+      ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"],
       ["s", "star or unstar an epic"], ["c", "copy the key"], ["o", "open in Jira"], ["i", "this space's ticket"],
       ["1  2  tab", "Issues / Epics"], ["r", "refresh"], ["p", "open as a pane (dialog only)"], ["esc", "back, clear, close"],
     ];

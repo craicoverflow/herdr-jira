@@ -25,8 +25,8 @@ import (
 // share one sign-in and one set of caches.
 
 // apiVersion is bumped when an op's shape changes, so a mod can tell an old
-// helper binary from a new one.
-const apiVersion = 1
+// helper binary from a new one. 2: transitions takes --type and --status.
+const apiVersion = 2
 
 type apiReply struct {
 	OK    bool      `json:"ok"`
@@ -227,6 +227,8 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 	scope := fs.String("scope", "issues", "")
 	query := fs.String("query", "", "")
 	row := fs.String("row", "", "")
+	issueType := fs.String("type", "", "the issue's type, as last seen")
+	status := fs.String("status", "", "the issue's status, as last seen")
 	var branches stringList
 	fs.Var(&branches, "branch", "")
 	pos, err := parseInterleaved(fs, rest)
@@ -295,7 +297,7 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 		if err != nil {
 			return nil, err
 		}
-		ts, err := src.transitions(ctx, k)
+		ts, err := transitionsFor(ctx, src, k, *issueType, *status, *refresh)
 		if err != nil {
 			return nil, err
 		}
@@ -489,7 +491,7 @@ func apiLogout() (any, error) {
 	if err != nil && !errors.Is(err, errLoggedOut) {
 		return nil, err
 	}
-	for _, p := range []string{issuesCachePath(), legacyIssuesCachePath(), epicsCachePath(), appLabelsPath(), mePath(), loginStatePath()} {
+	for _, p := range []string{issuesCachePath(), legacyIssuesCachePath(), epicsCachePath(), transitionsCachePath(), appLabelsPath(), mePath(), loginStatePath()} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
@@ -666,7 +668,7 @@ func apiIssueDetail(ctx context.Context, src apiSource, key string) (any, error)
 // apiTransition moves key through transition id, then re-reads it so the
 // caches (and the reply) show the new status at once.
 func apiTransition(ctx context.Context, src apiSource, key, id string) (any, error) {
-	if err := src.transition(ctx, key, id); err != nil {
+	if err := transitionIssue(ctx, src, key, id); err != nil {
 		return nil, err
 	}
 	invalidateLabelCache(key)

@@ -44,8 +44,10 @@ sh scripts/build.sh && ./bin/herdr-jira app install   # then press cmd-j in Herd
 - **Sidebar ticket label.** Each pane shows the issue key and live status for
   the branch it is on, confirmed against Jira so a branch like `pr-4567-fix`
   never shows a bogus ticket.
-- **Live transitions.** Change status from a freshly fetched list of valid
-  transitions — never hardcoded.
+- **Transitions from Jira.** Change status from Jira's list of valid
+  transitions — never hardcoded. Each workflow step's list (project, issue
+  type, status) is kept for a day, so the menu usually opens without a call;
+  `r` in the list refetches it.
 - **Branch from a ticket.** Create a branch from the focused issue, with
   prompts to assign it to you and move it to In Progress.
 
@@ -110,7 +112,9 @@ command = "herdr-jira.issue"
   and paint instantly. Issues are refetched from Jira when the cache is more
   than 30 minutes old, Epics when it is more than 3 hours old; within those
   windows opening the popup makes no API call. Press `r` to refresh the
-  current tab on demand.
+  current tab on demand. The transitions offered from each workflow step are
+  kept for a day: a transition Jira refuses drops the project's lists, and
+  `r` in the transition list refetches.
 - **`issue`** — resolves the current branch to a ticket key, confirms it with
   Jira, and opens straight on its detail screen. No key on the branch, or one
   Jira does not recognise, falls back to the list with a notice.
@@ -124,7 +128,7 @@ are commands; in *search* mode (after `/`) letters type into the query, so
 |---|---|
 | `enter` | open the detail screen (an epic opens its children) |
 | `/` | search: filters the lanes as you type, then searches Jira |
-| `t` | change status (a live list of valid transitions) |
+| `t` | change status (the valid transitions, kept for a day; r in the list refetches) |
 | `a` | assign to me |
 | `b` | new branch from the issue |
 | `s` | star or unstar the epic (epics only) |
