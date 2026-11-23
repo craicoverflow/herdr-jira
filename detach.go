@@ -4,7 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // startDetached starts exe with args in a session of its own, its output
@@ -32,6 +35,27 @@ func startDetached(exe string, args []string, logPath string) (int, error) {
 	pid := cmd.Process.Pid
 	_ = cmd.Process.Release()
 	return pid, nil
+}
+
+// stopLoginWorker ends the sign-in worker pid and waits briefly for it to
+// go. It checks first that pid is still a login worker, so a PID the system
+// has since reused for something else is left alone.
+func stopLoginWorker(pid int) {
+	if !isLoginWorker(pid) {
+		return
+	}
+	if syscall.Kill(pid, syscall.SIGTERM) != nil {
+		return
+	}
+	for i := 0; i < 20 && processAlive(pid); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// isLoginWorker reports whether pid is running `api login-worker`.
+func isLoginWorker(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	return err == nil && strings.Contains(string(out), "login-worker")
 }
 
 // processAlive reports whether pid is a running process.

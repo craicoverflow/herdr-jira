@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -108,7 +110,12 @@ func installMod(home, from string, bindKey, demo bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	marker := filepath.Join(filepath.Dir(helper), "demo")
+	// Earlier installs named the marker "demo"; .bin is this mod's own
+	// folder, so that file can only be ours.
+	if err := os.Remove(filepath.Join(filepath.Dir(helper), "demo")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	marker := filepath.Join(filepath.Dir(helper), demoMarkerName)
 	if demo {
 		if err := os.WriteFile(marker, []byte("Remove this file, or reinstall without --demo, to use your Jira.\n"), 0o644); err != nil {
 			return err
@@ -116,11 +123,10 @@ func installMod(home, from string, bindKey, demo bool, out io.Writer) error {
 	} else if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	fmt.Fprintf(out, "Installed the Jira mod in %s (%d files", dest, len(written))
-	if removed > 0 {
-		fmt.Fprintf(out, ", %d old ones removed", removed)
+	fmt.Fprintf(out, "Installed the Jira mod in %s (%d files) and its helper at %s.\n", dest, len(written), helper)
+	if len(removed) > 0 {
+		fmt.Fprintf(out, "Removed files an earlier version installed: %s.\n", strings.Join(removed, ", "))
 	}
-	fmt.Fprintf(out, ") and its helper at %s.\n", helper)
 	if demo {
 		fmt.Fprintln(out, "Demo mode: it shows a pretend Jira site. Reinstall without --demo to use yours.")
 	}
@@ -166,10 +172,12 @@ func copyModFiles(src fs.FS, dest string) (map[string]bool, error) {
 }
 
 // pruneModFiles removes files a previous install left that this one doesn't
-// have. Hidden files (the helper) and the files Herdr writes into a mod
-// folder (jsconfig.json, *.d.ts) stay.
-func pruneModFiles(dest string, keep map[string]bool) (int, error) {
-	removed := 0
+// have, and returns their paths. Only the kinds of file the mod ships are
+// candidates (scripts and mod.json at the top, icons/*.svg), so the helper,
+// the files Herdr writes into a mod folder (jsconfig.json, *.d.ts) and
+// anything else a person keeps there stay.
+func pruneModFiles(dest string, keep map[string]bool) ([]string, error) {
+	var removed []string
 	err := filepath.WalkDir(dest, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -185,16 +193,26 @@ func pruneModFiles(dest string, keep map[string]bool) (int, error) {
 		}
 		rel, _ := filepath.Rel(dest, path)
 		rel = filepath.ToSlash(rel)
-		if keep[rel] || rel == "jsconfig.json" || strings.HasSuffix(rel, ".d.ts") {
+		if keep[rel] || !shippedKind(rel) {
 			return nil
 		}
-		removed++
+		removed = append(removed, rel)
 		return os.Remove(path)
 	})
 	return removed, err
 }
 
-// installHelper copies this running binary to path.
+// shippedKind reports whether rel (a path in the mod folder) is the kind of
+// file the mod ships, matching the embed pattern above.
+func shippedKind(rel string) bool {
+	if dir, name := filepath.Split(filepath.FromSlash(rel)); dir == "" {
+		return strings.HasSuffix(name, ".js") || name == "mod.json"
+	}
+	ok, _ := filepath.Match("icons/*.svg", rel)
+	return ok
+}
+
+// installHelper copies this running binary to path, keeping its mode.
 func installHelper(path string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -203,17 +221,27 @@ func installHelper(path string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	data, err := os.ReadFile(exe)
+	src, err := os.Open(exe)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", exe, err)
 	}
-	if err := writeFileMode(path, data, 0o755); err != nil {
+	defer src.Close()
+	st, err := src.Stat()
+	if err != nil {
+		return "", err
+	}
+	if err := writeFileFrom(path, src, st.Mode().Perm()); err != nil {
 		return "", fmt.Errorf("install the helper: %w", err)
 	}
 	return path, nil
 }
 
 func writeFileMode(path string, data []byte, mode os.FileMode) error {
+	return writeFileFrom(path, bytes.NewReader(data), mode)
+}
+
+// writeFileFrom replaces path atomically with what r holds.
+func writeFileFrom(path string, r io.Reader, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -222,7 +250,7 @@ func writeFileMode(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := io.Copy(tmp, r); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -233,6 +261,20 @@ func writeFileMode(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// rewriteInPlace replaces a person's file (keys.json) with data. A symlink
+// (a dotfile manager's) is followed so the link stays a link, and the file
+// keeps its permissions.
+func rewriteInPlace(path string, data []byte) error {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+	mode := os.FileMode(0o600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	return writeFileMode(path, data, mode)
 }
 
 var globalSectionRE = regexp.MustCompile(`"global"\s*:\s*\{`)
@@ -281,7 +323,7 @@ func bindOpenKey(path, key string) (string, error) {
 	if err := json.Unmarshal(edited, &check); err != nil || check["global"][key] != modAction {
 		return "", errors.New("couldn't edit keys.json safely")
 	}
-	if err := writeFileMode(path, edited, 0o600); err != nil {
+	if err := rewriteInPlace(path, edited); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Bound %s to open it (keys.json, global).", key), nil
@@ -298,19 +340,56 @@ func uninstallMod(home string, out io.Writer) error {
 	if err != nil {
 		return nil
 	}
-	lineRE := regexp.MustCompile(`(?m)^[ \t]*"[^"]+"\s*:\s*"` + regexp.QuoteMeta(modAction) + `"\s*,?[ \t]*\r?\n`)
-	edited := lineRE.ReplaceAll(data, nil)
-	if len(edited) == len(data) {
-		return nil
-	}
-	var check map[string]any
-	if json.Unmarshal(edited, &check) != nil {
+	edited, ok := unbindMod(data)
+	if !ok {
 		fmt.Fprintf(out, "Left keys.json alone: remove the %q binding yourself.\n", modAction)
 		return nil
 	}
-	if err := writeFileMode(path, edited, 0o600); err != nil {
+	if edited == nil {
+		return nil
+	}
+	if err := rewriteInPlace(path, edited); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "Removed its key binding from keys.json.")
 	return nil
+}
+
+var (
+	modBindingLineRE = regexp.MustCompile(`(?m)^[ \t]*"[^"]+"\s*:\s*"` + regexp.QuoteMeta(modAction) + `"\s*,?[ \t]*\r?\n`)
+	// danglingCommaRE is the comma left before a closing brace when the
+	// binding removed was the last in its section.
+	danglingCommaRE = regexp.MustCompile(`,(\s*\})`)
+)
+
+// unbindMod removes the lines binding a key to the mod from keys.json's
+// text. It returns nil when there are none, and ok false when it can't
+// remove them leaving every other binding exactly as it was.
+func unbindMod(data []byte) (edited []byte, ok bool) {
+	edited = modBindingLineRE.ReplaceAll(data, nil)
+	if len(edited) == len(data) {
+		return nil, true
+	}
+	var want map[string]map[string]any
+	if json.Unmarshal(data, &want) != nil {
+		return nil, false
+	}
+	for _, binds := range want {
+		for k, action := range binds {
+			if a, isStr := action.(string); isStr && a == modAction {
+				delete(binds, k)
+			}
+		}
+	}
+	same := func(b []byte) bool {
+		var got map[string]map[string]any
+		return json.Unmarshal(b, &got) == nil && reflect.DeepEqual(got, want)
+	}
+	if same(edited) {
+		return edited, true
+	}
+	if fixed := danglingCommaRE.ReplaceAll(edited, []byte("$1")); same(fixed) {
+		return fixed, true
+	}
+	return nil, false
 }

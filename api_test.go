@@ -22,7 +22,23 @@ type fakeAPISource struct {
 
 func (f *fakeAPISource) getFull(ctx context.Context, key string) (issueFull, error) {
 	f.fullKeys = append(f.fullKeys, key)
+	if f.full.Key == "" {
+		if r, ok := f.results[key]; ok {
+			return issueFull{Key: r.Key, Summary: r.Summary, StatusName: r.StatusName, StatusCategory: r.StatusCategory,
+				IssueType: r.IssueType, HierarchyLevel: r.HierarchyLevel, Priority: r.Priority}, nil
+		}
+	}
 	return f.full, f.fullErr
+}
+
+// writePickerCache writes a fresh Issues cache, for tests.
+func writePickerCache(issues, subtasks []ticketStatus) error {
+	return writeIssuesCache(issuesCache{FetchedAt: nowFn(), Rows: append(append([]ticketStatus{}, issues...), subtasks...)})
+}
+
+func readPickerCache() []ticketStatus {
+	c, _ := readIssuesCache()
+	return c.Rows
 }
 
 func (f *fakeAPISource) userInfo(ctx context.Context) (userInfo, error) { return f.user, nil }
@@ -153,8 +169,9 @@ func TestAPIIssuesAutoRefetchesStaleCache(t *testing.T) {
 	src := newFakeAPI()
 	src.myIssuesList = []ticketStatus{{Key: "A-1"}}
 	callAPI(t, src, "issues")
-	old := time.Now().Add(-2 * issuesCacheTTL)
-	if err := os.Chtimes(pickerCachePath(), old, old); err != nil {
+	c, _ := readIssuesCache()
+	c.FetchedAt = time.Now().Add(-2 * issuesCacheTTL)
+	if err := writeIssuesCache(c); err != nil {
 		t.Fatal(err)
 	}
 	src.myIssuesList = []ticketStatus{{Key: "A-1"}, {Key: "A-9"}}
@@ -194,7 +211,7 @@ func TestAPITransitionPatchesCachesAndDropsDone(t *testing.T) {
 	src := newFakeAPI()
 	src.myIssuesList = []ticketStatus{{Key: "A-1", StatusName: "To Do", StatusCategory: "new", Priority: "High"}, {Key: "A-2", StatusName: "To Do", StatusCategory: "new"}}
 	callAPI(t, src, "issues")
-	before, _ := os.Stat(pickerCachePath())
+	before, _ := readIssuesCache()
 
 	src.results["A-1"] = ticketStatus{Key: "A-1", StatusName: "In Progress", StatusCategory: "indeterminate"}
 	var got struct {
@@ -208,8 +225,8 @@ func TestAPITransitionPatchesCachesAndDropsDone(t *testing.T) {
 	if rows[0].StatusName != "In Progress" || rows[0].Priority != "High" {
 		t.Fatalf("cache row not patched (or lost its priority): %+v", rows[0])
 	}
-	after, _ := os.Stat(pickerCachePath())
-	if !after.ModTime().Equal(before.ModTime()) {
+	after, _ := readIssuesCache()
+	if !after.FetchedAt.Equal(before.FetchedAt) {
 		t.Errorf("a local patch must not extend the cache's TTL")
 	}
 

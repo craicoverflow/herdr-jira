@@ -160,7 +160,35 @@ export function validBranch(name) {
 }
 
 // The worktree folder for a branch, as Herdr's worktree mod lays them out.
+// Different branches can share one (feat/a and feat-a), and a branch made of
+// punctuation can have none: see usableSlug.
 export const worktreeSlug = (branch) => branch.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+
+// Whether a slug names a folder of its own: not empty, and not "." or "..".
+export const usableSlug = (slug) => slug !== "" && !/^\.+$/.test(slug);
+
+// The folder of the worktree that has branch checked out, from `git worktree
+// list --porcelain` (blank-line separated records; detached and bare
+// worktrees have no branch line), or null.
+export function worktreeForBranch(porcelain, branch) {
+  let path = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) path = line.slice(9);
+    else if (line === "") path = null;
+    else if (line === `branch refs/heads/${branch}` && path) return path;
+  }
+  return null;
+}
+
+// A generation counter per name, for dropping replies that went stale on
+// their way: take a stamp before a request, bump the name when something
+// supersedes it, and check the stamp when the reply comes.
+export class Generations {
+  constructor() { this.n = new Map(); }
+  bump(name) { this.n.set(name, this.stamp(name) + 1); }
+  stamp(name) { return this.n.get(name) ?? 0; }
+  same(name, stamp) { return this.stamp(name) === stamp; }
+}
 
 // The first message an agent gets when it starts on an issue.
 export function agentTask(issue) {

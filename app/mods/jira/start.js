@@ -4,7 +4,7 @@
 // an agent started on the issue.
 
 import { exec, panes, spaces, run } from "herdr";
-import { worktreeSlug } from "./model.js";
+import { worktreeSlug, usableSlug, worktreeForBranch } from "./model.js";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 export function spaceFolder(space) {
@@ -40,13 +40,7 @@ export async function repoOf(folder, on) {
 // The folder of the worktree that has branch checked out, or null.
 async function worktreeFor(repo, branch, on) {
   const r = await git(repo.top, ["worktree", "list", "--porcelain"], on);
-  if (!r.ok) return null;
-  let path = null;
-  for (const line of r.out.split("\n")) {
-    if (line.startsWith("worktree ")) path = line.slice(9);
-    else if (line === `branch refs/heads/${branch}` && path) return path;
-  }
-  return null;
+  return r.ok ? worktreeForBranch(r.out, branch) : null;
 }
 
 export async function remoteHome(on) {
@@ -82,7 +76,14 @@ export async function startBranch(plan) {
       else run("space.new", { folder: existing, machine: on ?? "", tab: plan.tabName, ...agent });
       return `went back to the ${branch} worktree`;
     }
-    const path = `${plan.home}/.herdr/worktrees/${repo.name}/${worktreeSlug(branch)}`;
+    const slug = worktreeSlug(branch);
+    if (!usableSlug(slug)) throw new Error(`"${branch}" doesn't make a usable folder name. Use letters or digits in it.`);
+    const path = `${plan.home}/.herdr/worktrees/${repo.name}/${slug}`;
+    // Another branch can map to the same folder (feat/a and feat-a), or a
+    // removed worktree can have left it behind.
+    if ((await exec("sh", ["-c", 'test -e "$1"', "sh", path], { on: on ?? undefined })).code === 0) {
+      throw new Error(`${path} already exists. Rename the branch, or remove that folder.`);
+    }
     const add = exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, "HEAD"];
     const r = await git(repo.top, add, on);
     if (!r.ok) throw new Error(r.err || "git worktree add failed.");

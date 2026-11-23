@@ -86,7 +86,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	if err := runAppTo([]string{"install", "--home", home, "--demo"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"main.js", "model.js", "mod.json", "icons/ticket.svg", ".bin/herdr-jira", ".bin/demo", "jsconfig.json"} {
+	for _, f := range []string{"main.js", "model.js", "mod.json", "icons/ticket.svg", ".bin/herdr-jira", ".bin/herdr-jira.demo", "jsconfig.json"} {
 		if _, err := os.Stat(filepath.Join(dest, f)); err != nil {
 			t.Errorf("missing %s: %v", f, err)
 		}
@@ -106,7 +106,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	if err := runAppTo([]string{"install", "--home", home}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dest, ".bin", "demo")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dest, ".bin", demoMarkerName)); !os.IsNotExist(err) {
 		t.Errorf("installing without --demo should leave demo mode")
 	}
 

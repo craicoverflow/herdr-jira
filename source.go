@@ -497,6 +497,15 @@ type issueFull struct {
 	URL               string
 }
 
+// row is the list row for the issue.
+func (f issueFull) row() ticketStatus {
+	return ticketStatus{
+		Key: f.Key, Summary: f.Summary, StatusName: f.StatusName, StatusCategory: f.StatusCategory,
+		IssueType: f.IssueType, HierarchyLevel: f.HierarchyLevel, ParentKey: f.ParentKey,
+		ParentSummary: f.ParentSummary, Priority: f.Priority, AssigneeName: f.AssigneeName, Updated: f.Updated,
+	}
+}
+
 // issueComment is one comment, its body as markdown.
 type issueComment struct {
 	Author  string

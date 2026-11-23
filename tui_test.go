@@ -714,17 +714,18 @@ func TestSearchHitsAreNeverWrittenToThePickerCache(t *testing.T) {
 	m, _ = send(m, searchResultsMsg{seq: m.searchSeq, scope: scopeIssues, issues: []ticketStatus{{Key: "HIT-1"}}})
 	m, _ = send(m, issuesLoadedMsg{issues: []ticketStatus{{Key: "PROJ-1"}}, subtasks: []ticketStatus{{Key: "PROJ-2", ParentKey: "PROJ-1", HierarchyLevel: -1}}})
 
-	data, err := os.ReadFile(pickerCachePath())
+	data, err := os.ReadFile(issuesCachePath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "HIT-1") {
 		t.Errorf("search hits leaked into the cache: %s", data)
 	}
-	var cached []ticketStatus
-	if err := json.Unmarshal(data, &cached); err != nil || len(cached) != 2 {
-		t.Fatalf("cache = %s (%v), want a bare array of the 2 lane rows", data, err)
+	var c issuesCache
+	if err := json.Unmarshal(data, &c); err != nil || len(c.Rows) != 2 {
+		t.Fatalf("cache = %s (%v), want the 2 lane rows", data, err)
 	}
+	cached := c.Rows
 	if cached[0].Key != "PROJ-1" || cached[1].Key != "PROJ-2" {
 		t.Errorf("cache order = %v, want issues then sub-tasks", cached)
 	}
@@ -738,7 +739,7 @@ func TestOldShapeCacheDecodesAndRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := `[{"Key":"PROJ-1","Summary":"Widget","StatusName":"Open","StatusCategory":"new"}]`
-	if err := os.WriteFile(pickerCachePath(), []byte(old), 0o600); err != nil {
+	if err := os.WriteFile(legacyIssuesCachePath(), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m := sized(newPickerModel(&fakeJiraSource{}))

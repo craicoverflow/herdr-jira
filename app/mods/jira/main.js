@@ -46,8 +46,12 @@ export default class Jira extends View {
     this.typing = false;
     this.hits = { issues: null, epics: null };
     this.hitsFor = { issues: null, epics: null };
-    this.searching = { issues: false, epics: false };
+    this.searching = { issues: 0, epics: 0 }; // the seq of the search running, or 0
     this.searchSeq = 0;
+    // Bumped when something makes replies already on their way stale: a sign
+    // in or out ("session"), a local change to a tab's list ("issues",
+    // "epics"), a newer tickets lookup ("tickets").
+    this.gen = new M.Generations();
 
     this.selected = { issues: null, epics: null }; // row ids
     this.pinned = null; // an issue shown in the detail that isn't a list row
@@ -135,26 +139,35 @@ export default class Jira extends View {
     this.ticketsKey = null;
     this.resolveTickets(cx);
     if (!this.me) {
+      const g = this.gen.stamp("session");
       cx.spawn(async (cx) => {
         const r = await api("me");
-        if (r.ok) { this.me = r.data; cx.notify(); }
+        if (r.ok && this.gen.same("session", g)) { this.me = r.data; cx.notify(); }
       });
     }
   }
 
   // mode: "auto" (the cache when it is fresh, else Jira) or "refresh".
-  // Whatever is cached paints first.
+  // Whatever is cached paints first. A reply is dropped when the tab's list
+  // was changed here (a transition, assign or star) while it was on its way,
+  // since it was read before that change; the next tick catches up.
   loadTab(tab, mode, cx) {
     if (this.loading[tab]) return;
     this.loading[tab] = true;
+    const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
       if (!this.data[tab]) {
+        const g = this.gen.stamp(tab);
         const c = await api(tab, "--cached");
-        if (c.ok && c.data.cached) { this.data[tab] = c.data; cx.notify(); }
+        if (c.ok && c.data.cached && this.gen.same(tab, g) && this.gen.same("session", session)) { this.data[tab] = c.data; cx.notify(); }
       }
+      const g = this.gen.stamp(tab);
       const r = await api(tab, ...(mode === "refresh" ? ["--refresh"] : []));
+      if (!this.gen.same("session", session)) return; // signing in or out reset loading
       this.loading[tab] = false;
-      if (r.ok) {
+      if (r.ok && !this.gen.same(tab, g)) {
+        this.errors[tab] = null;
+      } else if (r.ok) {
         this.data[tab] = r.data;
         this.errors[tab] = null;
       } else if (!this.authFailed(r.error)) {
@@ -189,8 +202,13 @@ export default class Jira extends View {
     if (key === this.ticketsKey) return;
     this.ticketsKey = key;
     if (!branches.length) { this.tickets = {}; return; }
+    this.gen.bump("tickets");
+    const g = this.gen.stamp("tickets");
+    const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
       const r = await api("tickets", ...branches.flatMap((b) => ["--branch", b]), ...(force ? ["--force"] : []));
+      // A newer lookup (after a transition, say) answers instead.
+      if (!this.gen.same("tickets", g) || !this.gen.same("session", session)) return;
       if (r.ok) {
         this.tickets = r.data.tickets ?? {};
         this.maybeAutoPin();
@@ -202,8 +220,10 @@ export default class Jira extends View {
   loadDetail(key, cx) {
     const prev = this.details.get(key);
     this.details.set(key, { ...prev, loading: true, error: null });
+    const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
       const r = await api("issue", key);
+      if (!this.gen.same("session", session)) return;
       if (r.ok) {
         this.details.set(key, { data: r.data, at: Date.now(), loading: false });
         if (r.data.level > 0 && !this.children.has(key)) this.loadChildren(key, cx);
@@ -234,8 +254,10 @@ export default class Jira extends View {
     const c = this.children.get(key);
     if (c?.loading || (c?.list && !force)) return;
     this.children.set(key, { ...c, loading: true, error: null });
+    const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
       const r = await api("children", key);
+      if (!this.gen.same("session", session)) return;
       this.children.set(key, r.ok ? { list: r.data.children, loading: false } : { ...this.children.get(key), loading: false, error: r.error });
       if (!r.ok) this.authFailed(r.error);
       cx.notify();
@@ -246,8 +268,10 @@ export default class Jira extends View {
     const tr = this.transitions.get(key);
     if (tr?.loading || tr?.list) return;
     this.transitions.set(key, { loading: true });
+    const session = this.gen.stamp("session");
     cx.spawn(async (cx) => {
       const r = await api("transitions", key);
+      if (!this.gen.same("session", session)) return;
       this.transitions.set(key, r.ok ? { list: r.data.transitions } : { error: r.error });
       if (!r.ok) this.authFailed(r.error);
       cx.notify();
@@ -270,20 +294,38 @@ export default class Jira extends View {
     });
   }
 
+  // Polls the helper while a sign-in waits on the browser. One poll runs at
+  // a time, and polling stops if the helper stops answering.
   watchLogin(cx) {
     if (this.loginTimer) return;
+    let polling = false;
+    let failures = 0;
+    const stop = () => { this.loginTimer?.cancel(); this.loginTimer = null; };
     this.loginTimer = cx.timer.every(1500, (cx) => {
+      if (polling) return;
+      polling = true;
       cx.spawn(async (cx) => {
         const s = await api("session");
-        if (!s.ok) return;
+        polling = false;
+        if (!this.loginTimer) return;
+        if (!s.ok) {
+          if (++failures >= 5) {
+            stop();
+            this.session = { ...this.session, login: { state: "error", error: s.error } };
+            cx.notify();
+          }
+          return;
+        }
+        failures = 0;
         const state = s.data.login?.state;
         if (state === "waiting") {
           this.session = { ...this.session, login: s.data.login };
         } else {
-          this.loginTimer?.cancel();
-          this.loginTimer = null;
+          stop();
           this.session = s.data;
           if (s.data.signedIn && state === "done") {
+            this.gen.bump("session");
+            this.loading = { issues: false, epics: false };
             this.data = { issues: null, epics: null };
             this.details.clear();
             this.loadAll(cx);
@@ -299,7 +341,11 @@ export default class Jira extends View {
     cx.spawn(async (cx) => {
       const r = await api("logout");
       if (r.ok) {
+        this.gen.bump("session"); // replies still on their way are for the old sign-in
+        this.loginTimer?.cancel();
+        this.loginTimer = null;
         this.session = { signedIn: false };
+        this.loading = { issues: false, epics: false };
         this.data = { issues: null, epics: null };
         this.details.clear(); this.children.clear(); this.transitions.clear();
         this.tickets = {}; this.me = null; this.pinned = null; this.sheet = null;
@@ -461,12 +507,14 @@ export default class Jira extends View {
     if (!q || !tab) return;
     cx.timer.after(SEARCH_DELAY, (cx) => {
       if (seq !== this.searchSeq) return;
-      this.searching[tab] = true;
+      this.searching[tab] = seq;
       cx.notify();
       cx.spawn(async (cx) => {
         const r = await api("search", "--scope", tab, "--query", q);
-        if (seq !== this.searchSeq) return;
-        this.searching[tab] = false;
+        // The spinner is this search's until a newer one on the tab starts,
+        // whether or not its answer is still wanted.
+        if (this.searching[tab] === seq) this.searching[tab] = 0;
+        if (seq !== this.searchSeq) { cx.notify(); return; }
         if (r.ok) { this.hits[tab] = r.data.hits; this.hitsFor[tab] = q; }
         else if (!this.authFailed(r.error)) this.say(`Search failed: ${r.error.message}`, "error", cx);
         cx.notify();
@@ -478,10 +526,13 @@ export default class Jira extends View {
     this.input.set_value("");
     this.query = "";
     this.searchSeq++;
+    this.searching = { issues: 0, epics: 0 };
   }
 
   // Updates an issue everywhere it is shown after a change in Jira.
   applyIssue(issue) {
+    this.gen.bump("issues");
+    this.gen.bump("epics");
     const patch = (list, dropDone) => (list ?? []).filter((i) => !(dropDone && i.key === issue.key && M.isDone(issue)))
       .map((i) => (i.key === issue.key ? { ...i, ...issue } : i));
     if (this.data.issues) this.data.issues = { ...this.data.issues, issues: patch(this.data.issues.issues, true), subtasks: patch(this.data.issues.subtasks, true) };
@@ -499,7 +550,7 @@ export default class Jira extends View {
     this.menu = { key, at: 0 };
     this.loadTransitions(key, cx);
     if (!this.wide) this.narrowDetail = true;
-    cx.timer.after(30, () => this.menuHandle.focus());
+    cx.timer.after(30, () => { if (this.menu?.key === key && !this.sheet) this.menuHandle.focus(); });
   }
 
   closeMenu() {
@@ -509,6 +560,7 @@ export default class Jira extends View {
 
   transition(key, tr, cx) {
     this.closeMenu();
+    if (this.busy.has(key)) return this.say(`${key} is still being updated`, "info", cx);
     this.busy.set(key, "status");
     cx.spawn(async (cx) => {
       const r = await api("transition", key, tr.id);
@@ -548,6 +600,7 @@ export default class Jira extends View {
   }
 
   addMine(issue) {
+    this.gen.bump(issue.level > 0 ? "epics" : "issues");
     const top = (list) => [issue, ...(list ?? []).filter((i) => i.key !== issue.key)];
     if (issue.level > 0) { if (this.data.epics) this.data.epics = { ...this.data.epics, epics: top(this.data.epics.epics) }; }
     else if (issue.level < 0) { if (this.data.issues) this.data.issues = { ...this.data.issues, subtasks: top(this.data.issues.subtasks) }; }
@@ -561,6 +614,7 @@ export default class Jira extends View {
     const apply = (on) => {
       const keys = (this.data.epics?.starredKeys ?? []).filter((k) => k !== issue.key);
       const starred = (this.data.epics?.starred ?? []).filter((i) => i.key !== issue.key);
+      this.gen.bump("epics");
       this.data.epics = { ...(this.data.epics ?? e), starredKeys: on ? [...keys, issue.key] : keys, starred: on ? [...starred, issue] : starred };
       const d = this.details.get(issue.key);
       if (d?.data) this.details.set(issue.key, { ...d, data: { ...d.data, starred: on } });
@@ -1263,6 +1317,8 @@ export default class Jira extends View {
         .flex().items_center().justify_center().when(on, (el) => el.child(icon("check").size(12).text_color(t.accent_foreground))))
       .child(v_flex().min_w(0).child(div().text_size(12.5).child(label)).when(Boolean(sub), (el) => el.child(div().text_size(11).text_color(t.dim).child(sub))));
     const repoName = s.repo?.name ?? "";
+    // A new branch starts from what this space has checked out.
+    const base = s.repo?.branch ? `, new branch from ${s.repo.branch}` : ", new branch from the current commit";
     const mine = Boolean(this.details.get(issue.key)?.data?.mine);
     const spaceName = s.space?.name ?? "this space";
     const agentChip = (a, on) => h_flex().id(`jira-agent-${a?.key ?? "none"}`).h(28).px(10).gap(6).items_center().rounded(7).cursor_pointer().border_1()
@@ -1285,8 +1341,8 @@ export default class Jira extends View {
       .child(looking
         ? h_flex().gap(8).items_center().text_size(12).text_color(t.dim).child(icon("spinner").size(12).spin(900)).child("Looking at this space's repository…")
         : h_flex().gap(8).items_stretch()
-          .child(choice("jira-mode-wt", s.mode === "worktree", "folder-branch", "New worktree", s.repo ? `A new space on its own checkout of ${repoName}` : "No git repository here", () => { s.mode = "worktree"; }, !s.repo))
-          .child(choice("jira-mode-co", s.mode === "checkout", "branch", "Switch branch", s.repo ? s.repo.dirty ? "Here, in this checkout (it has uncommitted changes)" : "Here, in this checkout" : "No git repository here", () => { s.mode = "checkout"; }, !s.repo)))
+          .child(choice("jira-mode-wt", s.mode === "worktree", "folder-branch", "New worktree", s.repo ? `A new space on its own checkout of ${repoName}${base}` : "No git repository here", () => { s.mode = "worktree"; }, !s.repo))
+          .child(choice("jira-mode-co", s.mode === "checkout", "branch", "Switch branch", s.repo ? s.repo.dirty ? `Here, in this checkout (it has uncommitted changes)${base}` : `Here, in this checkout${base}` : "No git repository here", () => { s.mode = "checkout"; }, !s.repo)))
       .child(v_flex().gap(2)
         .child(mine
           ? check("jira-opt-assign", true, "Assigned to you", null, () => {}, true)

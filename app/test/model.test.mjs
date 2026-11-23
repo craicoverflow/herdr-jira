@@ -154,3 +154,30 @@ test("spaces map to tickets through any of their panes' branches", () => {
   assert.deepEqual(by.get("WEB-1").map((s) => s.id), ["s1", "s2"]);
   assert.deepEqual(M.branchesToResolve(spaces, panes), ["WEB-1-x", "WEB-1-y"]);
 });
+
+test("worktree slugs: collisions share a folder; punctuation-only names have none", () => {
+  assert.equal(M.worktreeSlug("feat/a"), M.worktreeSlug("feat-a"));
+  for (const b of ["+", "+.+", "+..+"]) assert.equal(M.usableSlug(M.worktreeSlug(b)), false, b);
+  assert.equal(M.usableSlug(M.worktreeSlug("PROJ-12-fix-login")), true);
+});
+
+test("worktreeForBranch reads porcelain output, skipping bare and detached entries", () => {
+  const out = [
+    "worktree /repos/app", "bare", "",
+    "worktree /home/me/.herdr/worktrees/app/old one", "HEAD 1234", "detached", "",
+    "worktree /home/me/.herdr/worktrees/app/PROJ-1 x", "HEAD 5678", "branch refs/heads/PROJ-1-x", "",
+  ].join("\n");
+  assert.equal(M.worktreeForBranch(out, "PROJ-1-x"), "/home/me/.herdr/worktrees/app/PROJ-1 x");
+  assert.equal(M.worktreeForBranch(out, "PROJ-1"), null);
+  assert.equal(M.worktreeForBranch("", "PROJ-1-x"), null);
+});
+
+test("generations: a stamp goes stale once its name is bumped", () => {
+  const g = new M.Generations();
+  const s = g.stamp("issues");
+  assert.equal(g.same("issues", s), true);
+  g.bump("epics");
+  assert.equal(g.same("issues", s), true, "other names don't affect it");
+  g.bump("issues");
+  assert.equal(g.same("issues", s), false);
+});

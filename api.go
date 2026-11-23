@@ -125,8 +125,8 @@ func (s *realJiraSource) userInfo(ctx context.Context) (userInfo, error) {
 }
 
 // runAPICommand is `herdr-jira api [--demo] <op> …`: --demo, or a file named
-// "demo" beside the binary (`app install --demo` writes one), answers from
-// the pretend site in demo.go instead of Jira.
+// herdr-jira.demo beside the binary (`app install --demo` writes one),
+// answers from the pretend site in demo.go instead of Jira.
 func runAPICommand(ctx context.Context, args []string, w io.Writer) error {
 	flagged := len(args) > 0 && args[0] == "--demo"
 	if flagged {
@@ -140,13 +140,18 @@ func runAPICommand(ctx context.Context, args []string, w io.Writer) error {
 	return runAPI(ctx, newJiraSource(), args, w)
 }
 
+// demoMarkerName is the file beside the helper that puts it in demo mode.
+// It is named for this program so that a helper installed among other
+// binaries (~/.local/bin) can't pick up someone else's file.
+const demoMarkerName = "herdr-jira.demo"
+
 // demoMarkerPath is the file that puts an installed helper in demo mode.
 func demoMarkerPath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(exe), "demo")
+	return filepath.Join(filepath.Dir(exe), demoMarkerName)
 }
 
 func demoMarkerPresent() bool {
@@ -364,11 +369,27 @@ func writeLoginState(st loginState) error {
 // loginInProgress reports whether st is a sign-in still waiting on the
 // browser: its worker is alive and has not outlived the consent timeout.
 func loginInProgress(st loginState) bool {
-	if st.State != "waiting" || nowFn().Sub(st.StartedAt) > signInTimeout+15*time.Second {
+	age := nowFn().Sub(st.StartedAt)
+	if st.State != "waiting" || age > signInTimeout+15*time.Second {
 		return false
 	}
-	return st.PID == 0 || processAlive(st.PID)
+	if st.PID == 0 {
+		// The worker records its PID as it starts; one that hasn't by now
+		// never ran.
+		return age < workerStartGrace
+	}
+	return processAlive(st.PID)
 }
+
+// workerStartGrace is how long a started sign-in may go without its worker
+// recording its PID.
+const workerStartGrace = 10 * time.Second
+
+// startDetachedFn and executableFn are seams for tests.
+var (
+	startDetachedFn = startDetached
+	executableFn    = os.Executable
+)
 
 func apiSession() map[string]any {
 	out := map[string]any{"signedIn": false, "version": pluginVersion, "api": apiVersion}
@@ -404,7 +425,7 @@ func apiStartLogin(force bool) (any, error) {
 	if st, ok := readLoginState(); ok && loginInProgress(st) {
 		return st, nil
 	}
-	exe, err := os.Executable()
+	exe, err := executableFn()
 	if err != nil {
 		return nil, err
 	}
@@ -412,18 +433,15 @@ func apiStartLogin(force bool) (any, error) {
 	if err := writeLoginState(st); err != nil {
 		return nil, err
 	}
-	pid, err := startDetached(exe, []string{"api", "login-worker"}, filepath.Join(stateDir(), "login.log"))
+	pid, err := startDetachedFn(exe, []string{"api", "login-worker"}, filepath.Join(stateDir(), "login.log"))
 	if err != nil {
 		st.State, st.Error = "error", classifyAPIError(err)
 		_ = writeLoginState(st)
 		return st, nil
 	}
+	// From here on only the worker writes login.json (its PID first), so a
+	// worker that fails at once can't have its error overwritten here.
 	st.PID = pid
-	// The worker may already have written its URL; keep whatever is newer.
-	if cur, ok := readLoginState(); ok && cur.URL != "" {
-		return cur, nil
-	}
-	_ = writeLoginState(st)
 	return st, nil
 }
 
@@ -434,6 +452,7 @@ func runLoginWorker(ctx context.Context) {
 	if st, ok := readLoginState(); ok && !st.StartedAt.IsZero() {
 		started = st.StartedAt
 	}
+	_ = writeLoginState(loginState{State: "waiting", PID: os.Getpid(), StartedAt: started})
 	err := signInWith(ctx, func(authURL string) {
 		_ = writeLoginState(loginState{State: "waiting", URL: authURL, PID: os.Getpid(), StartedAt: started})
 		_ = openBrowser(authURL)
@@ -445,11 +464,21 @@ func runLoginWorker(ctx context.Context) {
 	_ = writeLoginState(st)
 }
 
-// apiLogout forgets the stored sign-in and the caches that belong to it.
+// apiLogout forgets the stored sign-in and the caches that belong to it. A
+// sign-in still waiting on the browser is stopped first, so it can't save
+// new credentials after this.
 func apiLogout() (any, error) {
 	if demoMode {
-		// Signing out of the demo site resets it.
-		return map[string]any{"signedIn": true, "demo": true}, os.RemoveAll(stateDir())
+		// Signing out of the demo site resets it. enterDemo points the state
+		// folder at <state>/demo; anything else is the real one.
+		dir := stateDir()
+		if filepath.Base(dir) != "demo" {
+			return nil, fmt.Errorf("demo sign-out refused: %s is not the demo state folder", dir)
+		}
+		return map[string]any{"signedIn": true, "demo": true}, os.RemoveAll(dir)
+	}
+	if st, ok := readLoginState(); ok && loginInProgress(st) && st.PID > 0 {
+		stopLoginWorker(st.PID)
 	}
 	err := withCredentialsLock(func(credentials, error) (credentials, error) {
 		if err := os.Remove(credentialsPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -460,7 +489,7 @@ func apiLogout() (any, error) {
 	if err != nil && !errors.Is(err, errLoggedOut) {
 		return nil, err
 	}
-	for _, p := range []string{pickerCachePath(), epicsCachePath(), appLabelsPath(), mePath(), loginStatePath()} {
+	for _, p := range []string{issuesCachePath(), legacyIssuesCachePath(), epicsCachePath(), appLabelsPath(), mePath(), loginStatePath()} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
@@ -512,22 +541,21 @@ func apiMe(ctx context.Context, src apiSource, refresh bool) (any, error) {
 // apiIssues answers the Issues tab. mode "cached" never calls Jira; "auto"
 // calls it only when the cache is older than its TTL; "refresh" always does.
 func apiIssues(ctx context.Context, src apiSource, mode string) (any, error) {
-	fi, statErr := os.Stat(pickerCachePath())
-	hasCache := statErr == nil
-	fresh := hasCache && issuesCacheFresh()
-	if mode == "cached" || (mode == "auto" && fresh) {
-		issues, subtasks := splitCached(readPickerCache())
-		var fetchedAt time.Time
-		if hasCache {
-			fetchedAt = fi.ModTime()
-		}
-		return issuesReply(issues, subtasks, len(issues) >= myIssuesMaxResults, len(subtasks) >= myIssuesMaxResults, fetchedAt, fresh, hasCache), nil
+	c, hasCache := readIssuesCache()
+	if hasCache && !sameSite(c.CloudID, cloudIDFn()) {
+		c, hasCache = issuesCache{}, false // another site's cache
 	}
+	fresh := hasCache && c.fresh()
+	if mode == "cached" || (mode == "auto" && fresh) {
+		issues, subtasks := splitCached(c.Rows)
+		return issuesReply(issues, subtasks, len(issues) >= myIssuesMaxResults, len(subtasks) >= myIssuesMaxResults, c.FetchedAt, fresh, hasCache), nil
+	}
+	started := nowFn()
 	issues, subtasks, issuesMore, subtasksMore, err := src.myIssues(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_ = writePickerCache(issues, subtasks)
+	issues, subtasks = storeFetchedIssues(started, issues, subtasks)
 	return issuesReply(issues, subtasks, issuesMore, subtasksMore, nowFn(), true, true), nil
 }
 
@@ -547,7 +575,7 @@ func issuesReply(issues, subtasks []ticketStatus, issuesMore, subtasksMore bool,
 // same modes as apiIssues.
 func apiEpics(ctx context.Context, src apiSource, mode string) (any, error) {
 	c, ok := readEpicsCache()
-	if id := cloudIDFn(); ok && id != "" && c.CloudID != "" && c.CloudID != id {
+	if ok && !sameSite(c.CloudID, cloudIDFn()) {
 		ok = false // another site's cache
 	}
 	if mode == "cached" || (mode == "auto" && ok && c.fresh()) {
@@ -559,6 +587,7 @@ func apiEpics(ctx context.Context, src apiSource, mode string) (any, error) {
 		c.StarredKeys = starredKeys(c.CloudID)
 		return epicsReply(c, c.fresh(), true), nil
 	}
+	started := nowFn()
 	epics, more, err := src.myEpics(ctx)
 	if err != nil {
 		return nil, err
@@ -577,8 +606,7 @@ func apiEpics(ctx context.Context, src apiSource, mode string) (any, error) {
 			}
 		}
 	}
-	c = epicsCache{FetchedAt: nowFn(), Epics: epics, More: more, Starred: starred, StarredKeys: keys, CloudID: cloudID}
-	_ = writeEpicsCache(c)
+	c = storeFetchedEpics(started, epicsCache{FetchedAt: nowFn(), Epics: epics, More: more, Starred: starred, StarredKeys: keys, CloudID: cloudID})
 	return epicsReply(c, true, true), nil
 }
 
@@ -635,23 +663,19 @@ func apiIssueDetail(ctx context.Context, src apiSource, key string) (any, error)
 
 // ---- writes -----------------------------------------------------------------
 
-// apiTransition moves key through transition id, then re-reads its status so
-// the caches (and the reply) show the new one at once.
+// apiTransition moves key through transition id, then re-reads it so the
+// caches (and the reply) show the new status at once.
 func apiTransition(ctx context.Context, src apiSource, key, id string) (any, error) {
 	if err := src.transition(ctx, key, id); err != nil {
 		return nil, err
 	}
 	invalidateLabelCache(key)
 	invalidateAppLabel(key)
-	found, err := src.search(ctx, []string{key})
-	if err != nil {
+	t, ok := readBack(ctx, src, key)
+	if !ok {
 		return map[string]any{"key": key}, nil // moved; the lists catch up on refresh
 	}
-	t, ok := found[key]
-	if !ok {
-		return map[string]any{"key": key}, nil
-	}
-	patchCachedIssue(t)
+	recordPatch(cachePatch{Op: patchStatus, Row: t})
 	return map[string]any{"key": key, "issue": toAPIIssue(t)}, nil
 }
 
@@ -664,16 +688,25 @@ func apiAssign(ctx context.Context, src apiSource, key string) (any, error) {
 	if err := src.assign(ctx, key, accountID); err != nil {
 		return nil, err
 	}
-	found, err := src.search(ctx, []string{key})
-	if err != nil {
-		return map[string]any{"key": key}, nil
-	}
-	t, ok := found[key]
+	t, ok := readBack(ctx, src, key)
 	if !ok {
 		return map[string]any{"key": key}, nil
 	}
-	addCachedMine(t)
+	recordPatch(cachePatch{Op: patchMine, Row: t})
 	return map[string]any{"key": key, "issue": toAPIIssue(t)}, nil
+}
+
+// readBack reads key as it is just after a write. It asks for the issue
+// itself rather than searching: Jira's search index can trail a write by
+// seconds and would hand back the old status.
+func readBack(ctx context.Context, src apiSource, key string) (ticketStatus, bool) {
+	full, err := src.getFull(ctx, key)
+	if err != nil || !strings.EqualFold(full.Key, key) {
+		return ticketStatus{}, false
+	}
+	t := full.row()
+	t.Key = key
+	return t, true
 }
 
 // apiStar stars or unstars an epic. rowJSON, when the mod has the row at hand,
@@ -713,7 +746,7 @@ func apiStar(ctx context.Context, src apiSource, key, rowJSON string) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	if c, ok := readEpicsCache(); ok {
+	updateEpicsCache(cloudID, func(c *epicsCache) bool {
 		c.StarredKeys = starredKeys(cloudID)
 		kept := c.Starred[:0:0]
 		for _, s := range c.Starred {
@@ -725,8 +758,8 @@ func apiStar(ctx context.Context, src apiSource, key, rowJSON string) (any, erro
 			kept = append(kept, t)
 		}
 		c.Starred = kept
-		_ = writeEpicsCache(c)
-	}
+		return true
+	})
 	return map[string]any{"key": key, "starred": starred}, nil
 }
 
@@ -742,107 +775,6 @@ func isStarred(cloudID, key string) bool {
 		}
 	}
 	return false
-}
-
-// patchCachedIssue replaces key's row in the cached lists with t (dropping it
-// when it is now Done), keeping each cache's fetch time so its TTL is not
-// extended by a local change.
-func patchCachedIssue(t ticketStatus) {
-	if rows := readPickerCache(); len(rows) > 0 {
-		out := rows[:0:0]
-		changed := false
-		for _, r := range rows {
-			if r.Key == t.Key {
-				changed = true
-				if isDone(t) {
-					continue
-				}
-				r = mergeDisplay(t, r)
-			}
-			out = append(out, r)
-		}
-		if changed {
-			rewritePickerCache(out)
-		}
-	}
-	if c, ok := readEpicsCache(); ok {
-		changed := false
-		patch := func(in []ticketStatus, dropDone bool) []ticketStatus {
-			out := in[:0:0]
-			for _, r := range in {
-				if r.Key == t.Key {
-					changed = true
-					if dropDone && isDone(t) {
-						continue
-					}
-					r = mergeDisplay(t, r)
-				}
-				out = append(out, r)
-			}
-			return out
-		}
-		c.Epics = patch(c.Epics, true)
-		c.Starred = patch(c.Starred, false)
-		if changed {
-			_ = writeEpicsCache(c)
-		}
-	}
-}
-
-// addCachedMine puts t, just assigned to the user, at the top of its lane in
-// the cached lists (or updates it there).
-func addCachedMine(t ticketStatus) {
-	if isDone(t) {
-		return
-	}
-	if t.HierarchyLevel > 0 {
-		if c, ok := readEpicsCache(); ok && t.IssueType != "" {
-			out := []ticketStatus{t}
-			for _, r := range c.Epics {
-				if r.Key != t.Key {
-					out = append(out, r)
-				}
-			}
-			c.Epics = out
-			_ = writeEpicsCache(c)
-		}
-		return
-	}
-	if _, err := os.Stat(pickerCachePath()); err != nil {
-		return // nothing cached yet; the first load fetches it
-	}
-	out := []ticketStatus{t}
-	for _, r := range readPickerCache() {
-		if r.Key != t.Key {
-			out = append(out, r)
-		}
-	}
-	rewritePickerCache(out)
-}
-
-// mergeDisplay is t with any display field it lacks taken from old.
-func mergeDisplay(t, old ticketStatus) ticketStatus {
-	if t.ParentSummary == "" {
-		t.ParentSummary = old.ParentSummary
-	}
-	if t.Priority == "" {
-		t.Priority = old.Priority
-	}
-	if t.AssigneeName == "" {
-		t.AssigneeName = old.AssigneeName
-	}
-	return t
-}
-
-// rewritePickerCache writes rows back keeping the file's mtime, which is the
-// Issues cache's fetch time.
-func rewritePickerCache(rows []ticketStatus) {
-	fi, err := os.Stat(pickerCachePath())
-	issues, subtasks := splitCached(rows)
-	if writePickerCache(issues, subtasks) != nil || err != nil {
-		return
-	}
-	_ = os.Chtimes(pickerCachePath(), fi.ModTime(), fi.ModTime())
 }
 
 // ---- branch tickets ---------------------------------------------------------
