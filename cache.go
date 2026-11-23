@@ -58,8 +58,9 @@ func sameSite(cached, current string) bool {
 	return cached == "" || current == "" || cached == current
 }
 
-// cacheLockName guards every read-modify-write of the list caches, which the
-// TUI popup, the app mod and a second app window all make.
+// cacheLockName guards every read-modify-write of the list caches and the
+// transitions cache, which the TUI popup, the app mod and a second app window
+// all make.
 const cacheLockName = "cache.lock"
 
 // withStateLock runs fn holding an exclusive lock on the file name in the

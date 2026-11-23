@@ -12,7 +12,8 @@ shares its sign-in, caches and stars, so you can use both.
   its Jira issue, and every row shows which spaces are working on it.
 - **A detail pane** with the description and the latest comments rendered as
   markdown, plus sub-tasks, child issues, parent, assignee, priority and labels.
-- **Change status** from the issue's live transitions. Nothing is hardcoded.
+- **Change status** from the issue's transitions, as Jira lists them. Nothing
+  is hardcoded. Each workflow step's list is kept for a day; `r` refetches.
 - **Start work**: a branch named after the issue, either as a new worktree
   space (nested under its repo in the sidebar) or checked out where you are.
   It can also assign the issue to you, move it to In Progress, and start an
@@ -90,7 +91,9 @@ goes through the helper, `herdr-jira api <op>`, which prints one JSON object
 per call ([`../api.go`](../api.go)). The helper is the same binary the terminal
 plugin uses: the OAuth sign-in against `mcp.atlassian.com` and the MCP calls
 to Jira run there, and the tokens never reach the mod. The lists are cached on
-disk (Issues for 30 minutes, Epics for 3 hours), so the dialog paints at once.
+disk (Issues for 30 minutes, Epics for 3 hours), so the dialog paints at once,
+and so are the transitions from each workflow step (for a day), so the status
+menu opens at once.
 Each space's branch is matched to a ticket the way the plugin's sidebar label
 is: Jira-shaped keys in the branch name, confirmed with Jira and cached.
 

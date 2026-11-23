@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -283,6 +284,9 @@ func newPickerModelFor(src jiraSource, initialKeys []string, noKeyBranch string)
 	th := newTheme(terminalIsPlain())
 	tl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	tl.Title = "Transition to…"
+	refreshKey := key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh"))
+	tl.AdditionalShortHelpKeys = func() []key.Binding { return []key.Binding{refreshKey} }
+	tl.AdditionalFullHelpKeys = tl.AdditionalShortHelpKeys
 
 	ecl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	ecl.SetShowHelp(true)
@@ -430,16 +434,18 @@ func loadDetail(src jiraSource, key string) tea.Cmd {
 	}
 }
 
-func loadTransitions(src jiraSource, key string) tea.Cmd {
+// loadTransitions lists d's transitions, from the cache when it holds a list
+// for d's type and status, unless refresh.
+func loadTransitions(src jiraSource, d issueDetail, refresh bool) tea.Cmd {
 	return func() tea.Msg {
-		transitions, err := src.transitions(context.Background(), key)
+		transitions, err := transitionsFor(context.Background(), src, d.Key, d.IssueType, d.StatusName, refresh)
 		return transitionsLoadedMsg{transitions: transitions, err: err}
 	}
 }
 
 func applyTransition(src jiraSource, key, transitionID string) tea.Cmd {
 	return func() tea.Msg {
-		if err := src.transition(context.Background(), key, transitionID); err != nil {
+		if err := transitionIssue(context.Background(), src, key, transitionID); err != nil {
 			return transitionAppliedMsg{err: err}
 		}
 		// Invalidate tick's label cache for this key so the sidebar picks
@@ -515,8 +521,9 @@ func newBranchSuffixInput(key string) textinput.Model {
 
 // loadBranchPrep fetches what the wizard needs to decide which follow-up
 // questions are worth asking: the issue's current assignee/status, its
-// live transitions (board-specific, never hardcoded — same rule
-// applyTransition follows), and the signed-in user's own accountId.
+// transitions (board-specific, never hardcoded — same rule applyTransition
+// follows — but cached per workflow step), and the signed-in user's own
+// accountId.
 func loadBranchPrep(src jiraSource, key string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -524,7 +531,7 @@ func loadBranchPrep(src jiraSource, key string) tea.Cmd {
 		if err != nil {
 			return branchPrepLoadedMsg{err: err}
 		}
-		transitions, err := src.transitions(ctx, key)
+		transitions, err := transitionsFor(ctx, src, key, detail.IssueType, detail.StatusName, false)
 		if err != nil {
 			return branchPrepLoadedMsg{err: err}
 		}
@@ -595,7 +602,7 @@ func applyBranchFollowup(src jiraSource, key, branchName string, wantAssign, wan
 			done += ", assigned to you"
 		}
 		if wantTransition {
-			if err := src.transition(ctx, key, transitionID); err != nil {
+			if err := transitionIssue(ctx, src, key, transitionID); err != nil {
 				return branchFollowupMsg{err: fmt.Errorf("%s, but couldn't transition it to In Progress: %w", done, err)}
 			}
 			invalidateLabelCache(key)
@@ -1056,7 +1063,7 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingTransition {
 			m.pendingTransition = false
 			m.phase = phaseTransitionsLoading
-			return m, loadTransitions(m.src, d.Key)
+			return m, loadTransitions(m.src, d, false)
 		}
 		m.phase = phaseDetail
 		return m, nil
@@ -1161,7 +1168,7 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "t":
 				m.phase = phaseTransitionsLoading
-				return m, loadTransitions(m.src, m.detail.Key)
+				return m, loadTransitions(m.src, *m.detail, false)
 			case "a":
 				m.phase = phaseAssigning
 				return m, applyAssign(m.src, m.detail.Key)
@@ -1209,6 +1216,11 @@ func (m pickerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "q", "ctrl+c":
 				m.quitting = true
 				return m, tea.Quit
+			case "r":
+				if m.transitionList.FilterState() != list.Filtering {
+					m.phase = phaseTransitionsLoading
+					return m, loadTransitions(m.src, *m.detail, true)
+				}
 			case "enter":
 				if m.transitionList.FilterState() != list.Filtering {
 					if item, ok := m.transitionList.SelectedItem().(transitionItem); ok {

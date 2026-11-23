@@ -32,9 +32,14 @@ makes narrow JSON-RPC calls (`searchJiraIssuesUsingJql`, `getJiraIssue`,
 `getTransitionsForJiraIssue`, `transitionJiraIssue`, `editJiraIssue`). No LLM
 is in the path, so there is no token cost regardless of call volume.
 
-Transitions are workflow- and project-specific, so the plugin always calls
-`getTransitionsForJiraIssue` before offering a next-state picker; it never
-hardcodes a status list.
+Transitions are workflow- and project-specific, so the next-state picker
+always offers what `getTransitionsForJiraIssue` returned; it never hardcodes a
+status list. The answer is kept for a day per workflow step (project, issue
+type, status; `transitions_cache.json`), since it is the same for every issue
+at that step, unless a transition has a condition (Jira hides those per
+issue). On a miss the issue is read alongside, so a stale status from a list
+row can't file the list under the wrong step. An empty list is not kept, a
+refused transition drops the project's lists, and refresh refetches.
 
 ## Current behaviour
 
@@ -111,7 +116,9 @@ SHA-256 matches.
 The app runs a mod's programs with a 30-second limit, so `api login` starts a
 detached sign-in worker that records its consent URL and outcome in
 `login.json`, and the mod polls `api session`. Lists use the plugin's caches
-and TTLs (`api issues|epics [--cached|--refresh]`). Changes made through the
+and TTLs (`api issues|epics [--cached|--refresh]`), and
+`api transitions KEY --type … --status …` answers from the transitions cache
+(`--refresh` skips it). Changes made through the
 API (`transition`, `assign`, `star`) patch the cached rows in place, keeping
 each cache's fetch time, so the next paint is right without extending the TTL.
 `api tickets --branch …` replaces `tick` for the app: the same candidate-key

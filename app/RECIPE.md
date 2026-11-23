@@ -59,8 +59,8 @@ and statuses.
   searched for the tab's types (key prefix for `PROJ-12`, summary otherwise).
   Hits fill a Search results lane without repeating rows. `esc` clears it.
 - `t`, or a click on the lozenge, opens a "MOVE TO" list under it with the
-  issue's live transitions. `↑↓` and `enter` move the issue, which updates
-  everywhere at once.
+  issue's transitions (kept a day per workflow step). `↑↓` and `enter` move
+  the issue, which updates everywhere at once.
 - `enter` on an epic lists its children, with a back bar; `esc` returns.
 - `b`, or Start work, opens a sheet over the view: a branch name
   (`KEY-short-summary`), New worktree (a new space at

@@ -39,7 +39,7 @@ var (
 var hotkeys = []hotkey{
 	{Key: "enter", Hint: "enter", Mode: modeBrowse, Action: "open", Label: "open", Desc: "open the detail screen (an epic opens its children)", Rows: anyRow},
 	{Key: "/", Hint: "/", Mode: modeBrowse, Action: "search", Label: "search", Desc: "search: filters the lanes as you type, then searches Jira"},
-	{Key: "t", Hint: "t", Mode: modeBrowse, Action: "transition", Label: "transition", Desc: "change status (a live list of valid transitions)", Rows: anyRow},
+	{Key: "t", Hint: "t", Mode: modeBrowse, Action: "transition", Label: "transition", Desc: "change status (the valid transitions, kept for a day; r in the list refetches)", Rows: anyRow},
 	{Key: "a", Hint: "a", Mode: modeBrowse, Action: "assign", Label: "assign", Desc: "assign to me", Rows: anyRow},
 	{Key: "b", Hint: "b", Mode: modeBrowse, Action: "branch", Label: "branch", Desc: "new branch from the issue", Rows: anyRow},
 	{Key: "s", Hint: "s", Mode: modeBrowse, Action: "star", Label: "star", Desc: "star or unstar the epic (epics only)", Rows: epicRow},

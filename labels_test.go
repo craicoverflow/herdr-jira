@@ -24,12 +24,13 @@ type fakeJiraSource struct {
 	searchScopedResult []ticketStatus
 	searchScopedErr    error
 
-	getResult       issueDetail
-	getErr          error
-	transitionsList []transitionOption
-	transitionsErr  error
-	transitionErr   error
-	transitionCalls []string // transition IDs applied, in order
+	getResult        issueDetail
+	getErr           error
+	transitionsList  []transitionOption
+	transitionsErr   error
+	transitionsCalls int // calls to transitions
+	transitionErr    error
+	transitionCalls  []string // transition IDs applied, in order
 
 	myEpicsList        []ticketStatus
 	myEpicsMore        bool
@@ -81,6 +82,7 @@ func (f *fakeJiraSource) get(ctx context.Context, key string) (issueDetail, erro
 }
 
 func (f *fakeJiraSource) transitions(ctx context.Context, key string) ([]transitionOption, error) {
+	f.transitionsCalls++
 	return f.transitionsList, f.transitionsErr
 }
 
