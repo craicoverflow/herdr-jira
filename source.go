@@ -81,6 +81,9 @@ type jiraSource interface {
 	transitions(ctx context.Context, key string) ([]transitionOption, error)
 	transition(ctx context.Context, key, transitionID string) error
 	myEpics(ctx context.Context) (epics []ticketStatus, more bool, err error)
+	// runJQL answers a view: the issues matching jql, one page of at most
+	// max, and whether Jira has further rows.
+	runJQL(ctx context.Context, jql string, max int) (issues []ticketStatus, more bool, err error)
 	epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error)
 	assign(ctx context.Context, key, accountID string) error
 	// addComment posts body (markdown) as a new comment on key.
@@ -358,6 +361,10 @@ func (s *realJiraSource) myEpics(ctx context.Context) ([]ticketStatus, bool, err
 		return nil, false, fmt.Errorf("list your epics: %w", err)
 	}
 	return issues, more, nil
+}
+
+func (s *realJiraSource) runJQL(ctx context.Context, jql string, max int) ([]ticketStatus, bool, error) {
+	return s.runSearch(ctx, jql, max)
 }
 
 // epicChildrenMaxResults bounds one epic's children list to a page.
