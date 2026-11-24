@@ -21,6 +21,7 @@ import { api } from "./api.js";
 import * as M from "./model.js";
 import { icon, typeTile, statusPill, statusColors, priorityMark, avatar, kbd, button, spaceChip, spaceColor } from "./ui.js";
 import { currentSpace, spaceFolder, repoOf, remoteHome, startBranch } from "./start.js";
+import { setupMethods, setupSheet } from "./setup.js";
 
 const ROW_H = { head: 32, note: 34, issue: 36, subtask: 34, epic: 36 };
 const WIDE = 720; // below this, the list and the detail take turns
@@ -144,8 +145,11 @@ export default class Jira extends View {
       }
       this.setupError = null;
       this.applySession(s.data);
-      if (s.data.signedIn) this.loadAll(cx);
-      else if (s.data.login?.state === "waiting") this.watchLogin(cx);
+      if (s.data.signedIn) {
+        this.loadAll(cx);
+        // First run (or an account with several sites that still needs one chosen).
+        if (s.data.setup?.needed || s.data.login?.error?.code === "multiple_sites") this.openSetup(cx, true);
+      } else if (s.data.login?.state === "waiting") this.watchLogin(cx);
       cx.notify();
     });
   }
@@ -263,6 +267,7 @@ export default class Jira extends View {
       if (!this.gen.same("session", session)) return;
       if (r.ok) {
         this.details.set(key, { data: r.data, at: Date.now(), loading: false });
+        this.commentBox(key); // made here, not while drawing: states can't be created in render
         this.reconcileComments(key, r.data, began);
         if (r.data.level > 0 && !this.children.has(key)) this.loadChildren(key, cx);
         // The menu may have opened on a list row's older status.
@@ -286,6 +291,7 @@ export default class Jira extends View {
     cx.timer.after(d?.data ? 0 : 140, (cx) => {
       if (this.detailWanted !== key) return;
       this.detailWanted = null;
+      this.commentBox(key);
       this.loadDetail(key, cx);
     });
   }
@@ -380,6 +386,8 @@ export default class Jira extends View {
             this.loadAll(cx);
             this.say(`Signed in to ${this.siteHost()}`, "success", cx);
           }
+          // Signed in, but the account has several sites: choose one first.
+          if (s.data.signedIn && (s.data.login?.error?.code === "multiple_sites" || (state === "done" && s.data.setup?.needed))) this.openSetup(cx, true);
         }
         cx.notify();
       });
@@ -835,6 +843,7 @@ export default class Jira extends View {
       "prev-tab": () => this.cycleTab(-1, cx),
       keys: () => { this.sheet = { kind: "help" }; },
       new: () => this.openCreate(cx),
+      setup: () => this.openSetup(cx),
     };
     actions[c]?.();
   }
@@ -1096,6 +1105,7 @@ export default class Jira extends View {
   // it did something (so the event stops here).
   handleKey(k, cx) {
     if (this.sheet?.kind === "create") return this.createKey(k, cx);
+    if (this.sheet?.kind === "setup") return this.setupKey(k, cx);
     if (this.sheet) {
       if (k === "escape") { if (!this.sheet.busy) { this.sheet = null; this.handle.focus(); } return true; }
       if (this.sheet.kind === "help") { this.sheet = null; return true; }
@@ -1536,7 +1546,9 @@ export default class Jira extends View {
           .child(h_flex().gap(6).items_center().text_size(12).child(div().font_semibold().child(c.author || "Someone"))
             .child(div().text_color(t.dim).child(c.pending ? "just now" : `${M.ago(c.created)} ago`)))
           .child(div().text_size(12.5).child(TextView.markdown(`jira-c-${key}-${c.pending ? "p" : ""}${n}`, c.body || "_(empty)_").selectable(true).on_link_click((url, cx) => cx.open_url(url)))))));
-    const box = this.commentBox(key);
+    // Boxes are made in event handlers (wantDetail, loadDetail): a state can't be created while drawing.
+    const box = this.boxes.get(key);
+    if (!box) return section("Comments", all.length || null, v_flex().gap(12).when(Boolean(list), (el) => el.child(list)));
     const st = this.commentSt.get(key);
     const focused = this.commenting === key;
     const ready = M.canPost(box.value());
@@ -1615,11 +1627,11 @@ export default class Jira extends View {
   sheetView(t, cx) {
     const s = this.sheet;
     const scrim = div().id("jira-scrim").absolute().inset_0().bg("#00000066").flex().items_center().justify_center().p(20)
-      .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); if (!s.busy) { this.sheet = null; this.handle.focus(); cx.notify(); } });
-    const card = v_flex().id("jira-sheet").w(s.kind === "help" ? 440 : 480).max_w_full().max_h_full()
+      .on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); if (!s.busy && s.kind !== "setup") { this.sheet = null; this.handle.focus(); cx.notify(); } });
+    const card = v_flex().id("jira-sheet").w(s.kind === "help" ? 440 : s.kind === "setup" ? 500 : 480).max_w_full().max_h_full()
       .rounded(12).bg(t.popover).border_1().border_color(t.border).shadow_xl().p(20).gap(14)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation());
-    return scrim.child(s.kind === "help" ? this.helpSheet(t, card) : s.kind === "create" ? this.createSheet(t, card, cx) : this.startSheet(t, card, cx));
+    return scrim.child(s.kind === "help" ? this.helpSheet(t, card) : s.kind === "create" ? this.createSheet(t, card, cx) : s.kind === "setup" ? setupSheet(this, t, card, cx) : this.startSheet(t, card, cx));
   }
 
   createSheet(t, card, cx) {
@@ -1709,6 +1721,7 @@ export default class Jira extends View {
         .child(div().text_size(12.5).text_color(t.muted).child(what)))))
       .child(h_flex().pt(6).gap(8).items_center().border_t(1).border_color(t.border)
         .child(div().flex_1().text_size(11.5).text_color(t.dim).child(this.me ? `Signed in as ${this.me.name}${this.siteHost() ? ` on ${this.siteHost()}` : ""}` : ""))
+        .child(button(t, "jira-setup-open", { label: "Set up", iconName: "sparkles", kind: "ghost", size: "sm", tooltip: "Site, default project and tabs", onClick: (_e, cx) => { this.openSetup(cx); cx.notify(); } }))
         .child(button(t, "jira-signout", { label: "Sign out", iconName: "logout", kind: "ghost", size: "sm", onClick: (_e, cx) => { this.signOut(cx); cx.notify(); } })));
   }
 
@@ -1778,7 +1791,10 @@ export default class Jira extends View {
   }
 }
 
+Object.assign(Jira.prototype, setupMethods);
+
 // An agent's icon as Herdr's program table describes it.
+
 function svgOrImage(a) {
   return a.tint ? svg(a.icon).size(14).flex_none() : image(a.icon).size(14).flex_none();
 }

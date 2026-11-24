@@ -451,3 +451,110 @@ export function filterProjects(projects, q) {
   const f = (q ?? "").trim().toLowerCase();
   return (projects ?? []).filter((p) => !f || p.key.toLowerCase().includes(f) || (p.name ?? "").toLowerCase().includes(f));
 }
+
+// ---- first-run setup ---------------------------------------------------------------
+// The setup sheet's steps and what it writes. The helper validates and merges
+// the result into config.json; nothing here touches a file.
+
+export const SETUP_ORDER = ["site", "project", "tabs"];
+
+// The screens setup shows: the site step only when the account reaches more
+// than one Jira Cloud site, and at most three screens in all.
+export function setupSteps(sites) {
+  const several = (sites ?? []).filter((s) => s.cloud !== false).length > 1;
+  return SETUP_ORDER.filter((s) => s !== "site" || several);
+}
+
+// The step after (or before) `at`, or null past either end (after the last is
+// "done": save and land on My work).
+export function stepAfter(steps, at, dir = 1) {
+  const i = steps.indexOf(at) + dir;
+  return i >= 0 && i < steps.length ? steps[i] : null;
+}
+
+// The projects matching what was typed, best first: a key that starts with it,
+// then a key that contains it, then a name that does. Order within each is kept.
+export function rankProjects(projects, q) {
+  const f = (q ?? "").trim().toLowerCase();
+  const list = projects ?? [];
+  if (!f) return list;
+  const rank = (p) => {
+    const key = p.key.toLowerCase();
+    if (key === f) return 0;
+    if (key.startsWith(f)) return 1;
+    if (key.includes(f)) return 2;
+    if ((p.name ?? "").toLowerCase().startsWith(f)) return 3;
+    if ((p.name ?? "").toLowerCase().includes(f)) return 4;
+    return -1;
+  };
+  return list.map((p, i) => ({ p, i, r: rank(p) })).filter((x) => x.r >= 0).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.p);
+}
+
+// `size` rows of a long list kept around the highlighted one: { items, start,
+// before, after } (how many are cut off above and below).
+export function windowAround(list, at, size) {
+  const n = list.length;
+  if (n <= size) return { items: list, start: 0, before: 0, after: 0 };
+  const start = Math.max(0, Math.min(n - size, at - Math.floor(size / 2)));
+  return { items: list.slice(start, start + size), start, before: start, after: n - start - size };
+}
+
+// A highlight moved by `step` within a list of `n`, clamped.
+export const clampMove = (at, step, n) => (n <= 0 ? 0 : Math.max(0, Math.min(n - 1, at + step)));
+
+export const TAB_NAME_MAX = 30;
+
+// What is wrong with a JQL tab that is about to be added, or "". `others` are
+// the tabs it joins.
+export function validateTab({ name, jql }, others = []) {
+  const n = (name ?? "").trim();
+  if (!n) return "Give the tab a name.";
+  if ([...n].length > TAB_NAME_MAX) return `A tab's name can't be longer than ${TAB_NAME_MAX} characters.`;
+  if (others.some((o) => o.name.trim().toLowerCase() === n.toLowerCase())) return `There is already a tab called ${n}.`;
+  if (!(jql ?? "").trim()) return "Type a JQL query.";
+  return "";
+}
+
+// A session view as the config.json entry that makes it.
+export function viewEntry(v) {
+  if (v.kind === "my-work" || v.kind === "epics") {
+    const dflt = v.kind === "epics" ? "Epics" : "My work";
+    return v.name && v.name !== dflt ? { builtin: v.kind, name: v.name } : { builtin: v.kind };
+  }
+  return { name: v.name, jql: v.jql, ...(v.groupBy === "none" ? { group_by: "none" } : {}) };
+}
+
+// The views list setup writes. `existing` are the tabs now (the session's
+// views); `epics` whether Epics is on; `custom` the JQL tabs wanted, those
+// that were already tabs carrying their `id`. Existing tabs keep their order,
+// Epics a new one goes right after My work, new JQL tabs last. My work is
+// always first-or-present.
+export function setupViews({ existing, epics, custom }) {
+  const out = [];
+  let sawMyWork = false;
+  let sawEpics = false;
+  for (const v of existing ?? []) {
+    if (v.kind === "my-work") { sawMyWork = true; out.push(viewEntry(v)); }
+    else if (v.kind === "epics") { sawEpics = true; if (epics) out.push(viewEntry(v)); }
+    else {
+      const keep = (custom ?? []).find((c) => c.id === v.id);
+      if (keep) out.push(viewEntry({ kind: "jql", name: keep.name, jql: keep.jql, groupBy: keep.groupBy ?? v.groupBy }));
+    }
+  }
+  if (!sawMyWork) out.unshift({ builtin: "my-work" });
+  if (epics && !sawEpics) {
+    const at = out.findIndex((e) => e.builtin === "my-work");
+    out.splice(at + 1, 0, { builtin: "epics" });
+  }
+  for (const c of custom ?? []) if (!c.id) out.push({ name: c.name.trim(), jql: c.jql.trim() });
+  return out;
+}
+
+// The JSON `setup-save` takes: only what the person chose (a skipped step
+// leaves its keys alone).
+export function setupPayload({ project, tabs }) {
+  const p = {};
+  if (project) p.default_project = project;
+  if (tabs) p.views = setupViews(tabs);
+  return p;
+}

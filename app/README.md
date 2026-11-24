@@ -121,7 +121,34 @@ Reinstall without `--demo` to use your own.
   `herdr-app do pane.split --direction right --mod jira`, or open it as a tab
   with `herdr-app do tab.new --mod jira --name Jira`.
 - **First run** asks you to sign in with Atlassian in the browser. There is no
-  API token to create, and no LLM sits between you and Jira.
+  API token to create, and no LLM sits between you and Jira. Then a short
+  setup follows (see [First run setup](#first-run-setup)).
+
+## First run setup
+
+After sign-in the app offers a setup of at most three screens. Every step is
+optional: `Skip` leaves what the step would change alone, `esc` skips the rest,
+and it isn't offered again by itself. Run it any time from `?` then **Set up**.
+It is not shown to anyone whose `config.json` already has `views` or
+`default_project`.
+
+1. **Site** (only when your account reaches more than one Jira Cloud site):
+   pick one. It is stored the way a one-site account's is, so every part of
+   the app and the terminal popup uses it.
+2. **Default project**: search by key or name, `↑↓` and `⏎` (or click). Stored
+   as `default_project`; quick-create starts on your space's ticket's project,
+   else the last one you created in, else this one, else the first.
+3. **Tabs**: My work is always on. Toggle Epics (`e`), and add JQL tabs (`a`):
+   a name and a JQL, which is run once against Jira before the tab is added
+   (Jira's own complaint is shown if it refuses). Jira's saved *filters* can't be
+   listed (the Atlassian MCP has no tool for it), so a tab for one is
+   `filter = 10234` as its JQL. Finish writes `views` and lands on My work.
+
+Setup writes `config.json` through the helper (`herdr-jira api setup-save`),
+which changes only `default_project` and `views`: every other key is kept as
+written, a file that isn't valid JSON is left alone with an error, and the new
+file replaces the old in one step. In the demo it writes to the demo's own
+state, never your config.
 
 | Key | Action |
 |---|---|
@@ -140,13 +167,13 @@ Reinstall without `--demo` to use your own.
 | `n` | new issue |
 | `r` | refresh |
 | `p` | open as a pane (dialog only) |
-| `?` | all keys, and sign out |
+| `?` | all keys, **Set up**, and sign out |
 | `esc` | back, clear the search, close |
 
 While a copy is shown, keys in `keys.json` can reach it as `jira.<command>`.
 The commands are `ticket`, `refresh`, `search` (or `search:<text>`),
 `status`, `assign`, `start`, `star`, `copy`, `browse`, `next`, `prev`,
-`open`, `back`, `issues`, `epics` and `keys`. For example,
+`open`, `back`, `issues`, `epics`, `keys`, `new` and `setup`. For example,
 `"cmd-shift-j": "jira.ticket"` jumps to this space's ticket.
 
 ## How it works

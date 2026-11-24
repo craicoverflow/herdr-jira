@@ -63,6 +63,25 @@ and statuses.
   light, on `#4c8df6` at 18 %); done is green (`#7fd69b` / `#1d7a3e` on
   `#3fae6a` at 18 %).
 
+## First run setup
+
+A sheet over the list, same card as quick-create (500 wide, 12 radius, 20
+padding): a 30px solid tile with the sparkles icon, a title and one muted line,
+step dots (the current one wider, accent) and `esc skip` at the right.
+Three screens at most, each a body and a footer: key hints at the left, then
+`Back` (ghost), `Skip` (ghost) and `Next` or `Finish` (primary).
+
+- **Site** (only with several): rows 44 high with a radio, name and host.
+  A site that isn't Jira Cloud is dim and can't be picked.
+- **Default project**: a search field with the search icon, then a list of
+  seven 30px rows (key 52 wide, name muted, a check on the chosen one) with
+  "n more" lines when cut. `↑↓` move, `⏎` or a click picks and moves on.
+- **Tabs**: 40px rows with a checkbox, a name and a dim line. My work shows a
+  check and "always on"; Epics has its checkbox and an `e` pill; each JQL tab
+  has an x. "Add a JQL tab" opens an accent-bordered form (name, JQL, an inline
+  error, `Check and add`). A scrim click doesn't dismiss it.
+- Done closes the sheet, lands on My work and says "You're set up."
+
 ## How it behaves
 
 - Opens on the ticket the focused pane's (else the space's) branch names, when
@@ -133,6 +152,9 @@ and statuses.
   JQL), Platform (a saved filter, ungrouped) and Epics. My work groups under IN
   PROGRESS, IN REVIEW and TO DO with WEB-143 and WEB-144 indented under
   WEB-142; Epics shows 2 assigned and 1 starred (PLAT-20 is Done and hidden).
+- On a fresh demo (or after `?` then Set up), setup shows Default project then
+  Tabs (the demo has one site), Finish writes only the demo's own config, and
+  the tabs and quick-create's project follow it.
 - A space on branch `WEB-142-…` shows the This space card and a chip on the
   WEB-142 row.
 - `t`, `↓`, `enter` on WEB-143 moves it, and the row, the detail and the footer
