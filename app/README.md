@@ -26,11 +26,18 @@ shares its sign-in, caches and stars, so you can use both.
   It can also assign the issue to you, move it to In Progress, and start an
   agent (Claude Code, Codex, anything Herdr knows) with the issue as its first
   message.
+- **Quick create**: `n` (or the **+** in the header, or the "n new issue" pill in
+  the footer) opens a compact form: project, issue type, summary, an optional
+  description and "Assign to me" (on by default). `enter` creates, `esc` cancels.
+  The project starts as your space's ticket's, else the last one you created in,
+  else the first. Projects and issue types are cached for six hours; `r` in the
+  form refetches. After creating you can open the issue, start work on it, or
+  create another (the form keeps its project and type).
 - **Search** filters your lanes as you type, then asks Jira for matches.
 - **Mouse and keys** throughout, with a legend in the footer and `?` for all keys.
 
-**It writes to Jira** when you ask it to: status changes, assigning to you,
-and Start work's follow-ups. Stars stay on your machine.
+**It writes to Jira** when you ask it to: creating an issue, status changes,
+assigning to you, and Start work's follow-ups. Stars stay on your machine.
 
 ## Tabs
 
@@ -130,6 +137,7 @@ Reinstall without `--demo` to use your own.
 | `o` | open in Jira |
 | `i` | this space's ticket |
 | `1`-`9` `tab` | switch tabs |
+| `n` | new issue |
 | `r` | refresh |
 | `p` | open as a pane (dialog only) |
 | `?` | all keys, and sign out |

@@ -292,3 +292,28 @@ test("commentError says what happened in plain words", () => {
   assert.match(M.commentError({}), /try again/);
   assert.match(M.commentError({}), /kept/);
 });
+
+test("validateCreate asks for project, type and a summary, in that order", () => {
+  assert.equal(M.validateCreate({ type: "Task", summary: "x" }), "Pick a project.");
+  assert.equal(M.validateCreate({ project: "WEB", summary: "x" }), "Pick an issue type.");
+  assert.equal(M.validateCreate({ project: "WEB", type: "Task", summary: "   " }), "Summary is required.");
+  assert.match(M.validateCreate({ project: "WEB", type: "Task", summary: "é".repeat(256) }), /longer than 255/);
+  assert.equal(M.validateCreate({ project: "WEB", type: "Task", summary: "é".repeat(255) }), "");
+});
+
+test("pickIssueType keeps the current type, then the last used, then a plain one", () => {
+  const types = [{ name: "Epic", level: 1 }, { name: "Bug" }, { name: "Task" }];
+  assert.equal(M.pickIssueType(types, "Bug", "Task"), "Bug");
+  assert.equal(M.pickIssueType(types, "Story", "Bug"), "Bug");
+  assert.equal(M.pickIssueType(types, null, null), "Task");
+  assert.equal(M.pickIssueType([{ name: "Epic", level: 1 }, { name: "Incident" }], null, null), "Incident");
+  assert.equal(M.pickIssueType([{ name: "Epic", level: 1 }], null, null), "Epic");
+  assert.equal(M.pickIssueType([], "Bug", null), null);
+});
+
+test("filterProjects matches key or name", () => {
+  const ps = [{ key: "WEB", name: "Storefront" }, { key: "API", name: "Platform API" }];
+  assert.deepEqual(M.filterProjects(ps, "front").map((p) => p.key), ["WEB"]);
+  assert.deepEqual(M.filterProjects(ps, "api").map((p) => p.key), ["API"]);
+  assert.equal(M.filterProjects(ps, "").length, 2);
+});

@@ -150,6 +150,18 @@ confirmation, with statuses kept in `app_labels.json` so the TUI's `tick`
 Issue details are fetched with `responseContentFormat: markdown`; Jira still
 answers some fields in ADF, which `adf.go` turns into markdown.
 
+Quick create (`n`) uses three ops: `api projects [--ticket KEY] [--cached|--refresh]`
+(projects you may create in, from `getVisibleJiraProjects`, plus the default:
+the ticket's project, else the last project created in, kept in
+`last_project.json`, else the first), `api issuetypes PROJECT` (from
+`getJiraProjectIssueTypesMetadata`, sub-types left out) and `api create
+--project P --type T --summary S [--description D] [--assign-me]`
+(`createJiraIssue`; the description goes as plain text, which the tool reads as
+markdown). Projects and issue types are cached six hours each
+(`projects_cache.json`, `issuetypes_cache.json`). A create puts the new issue
+in the cached lists when it is assigned to the user, and Jira's refusals are
+mapped to plain sentences (`create_failed`).
+
 `api --demo` (or a `demo` file beside the helper, written by
 `app install --demo`) answers from a pretend site in `demo.go`, in a state
 folder of its own, so the mod can be tried and screenshotted without an
