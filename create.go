@@ -82,9 +82,10 @@ func buildCreateArgs(cloudID string, r createRequest, accountID string) map[stri
 }
 
 // chooseDefaultProject picks the form's project: the project of the space's
-// ticket, else the last one used to create an issue, else the first visible.
-// Each must be among the projects the person may create in.
-func chooseDefaultProject(projects []jiraProject, ticketProject, last string) string {
+// ticket, else the last one used to create an issue, else the default_project
+// from config.json (first-run setup writes it), else the first visible. Each
+// must be among the projects the person may create in.
+func chooseDefaultProject(projects []jiraProject, ticketProject, last, configured string) string {
 	has := func(k string) bool {
 		for _, p := range projects {
 			if strings.EqualFold(p.Key, k) {
@@ -93,7 +94,7 @@ func chooseDefaultProject(projects []jiraProject, ticketProject, last string) st
 		}
 		return false
 	}
-	for _, k := range []string{ticketProject, last} {
+	for _, k := range []string{ticketProject, last, configured} {
 		if has(k) {
 			for _, p := range projects {
 				if strings.EqualFold(p.Key, k) {
@@ -235,7 +236,7 @@ func apiProjects(ctx context.Context, src apiSource, mode, ticket string) (any, 
 		c.Projects = []jiraProject{}
 	}
 	return map[string]any{
-		"projects": c.Projects, "default": chooseDefaultProject(c.Projects, projectOfKey(ticket), readLastProject(cloudID)),
+		"projects": c.Projects, "default": chooseDefaultProject(c.Projects, projectOfKey(ticket), readLastProject(cloudID), configuredDefaultProject()),
 		"cached": ok, "fresh": fresh, "ttlSeconds": int(projectsCacheTTL.Seconds()),
 	}, nil
 }

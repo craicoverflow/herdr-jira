@@ -315,6 +315,9 @@ func enterDemo() {
 	ensureCloudIDFn = func(context.Context) (string, error) { return demoCloudID, nil }
 	siteURLFn = func() (string, error) { return demoSiteURL, nil }
 	viewsFn = demoViews
+	// The demo keeps its own config.json in its state folder, so setup
+	// writes (tabs, default project) never touch the real one.
+	configPathFn = func() string { return filepath.Join(stateDir(), "config.json") }
 	if _, err := os.Stat(starStatePath()); os.IsNotExist(err) {
 		_ = writeStars(demoCloudID, []starEntry{{Key: "PLAT-12"}, {Key: "PLAT-20"}})
 	}
@@ -323,12 +326,21 @@ func enterDemo() {
 // demoViews are the demo site's tabs: My work, two custom queries (one a
 // saved filter) and Epics, so every kind shows.
 func demoViews() ([]viewDef, []string) {
+	// Tabs chosen in the demo's setup win over the fixed set.
+	if cfg, err := loadConfig(); err == nil && len(cfg.Views) > 0 {
+		return resolveViews(cfg.Views)
+	}
 	return resolveViews(json.RawMessage(`[
 		{"builtin": "my-work"},
 		{"name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done"},
 		{"name": "Platform", "filter": 10234, "group_by": "none"},
 		{"builtin": "epics"}
 	]`))
+}
+
+// sites: the demo has the one, so setup skips that step.
+func (demoSource) sites(context.Context) ([]accessibleResource, error) {
+	return []accessibleResource{{ID: demoCloudID, URL: demoSiteURL, Name: "acme"}}, nil
 }
 
 // ---- quick-create ---------------------------------------------------------------

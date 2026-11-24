@@ -19,7 +19,7 @@ var (
 type errMultipleSites struct{ names []string }
 
 func (e errMultipleSites) Error() string {
-	return fmt.Sprintf("This account has access to several Jira sites (%s). Only one is supported.", strings.Join(e.names, ", "))
+	return fmt.Sprintf("This account has access to several Jira sites (%s). Choose one in Set up (press ? in the Jira app, then Set up).", strings.Join(e.names, ", "))
 }
 
 // accessibleResource is one entry from getAccessibleAtlassianResources,
@@ -40,19 +40,17 @@ type userInfo struct {
 	AccountID string `json:"account_id"`
 }
 
-// resolveCloudID calls getAccessibleAtlassianResources and returns the
-// single accessible site's cloudId and URL. A site can appear more than
-// once (once per scope bundle, seen in the spike), so the list is
-// de-duplicated by id first. Zero sites, several sites and a non-Cloud URL
-// each get their own error.
-func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL string, err error) {
+// fetchSites calls getAccessibleAtlassianResources and returns the sites the
+// account reaches, de-duplicated by id (a site can appear once per scope
+// bundle).
+func fetchSites(ctx context.Context, client *http.Client) ([]accessibleResource, error) {
 	raw, err := callTool(ctx, client, "getAccessibleAtlassianResources", map[string]any{})
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	var resources []accessibleResource
 	if err := decodeToolResultText(raw, &resources); err != nil {
-		return "", "", err
+		return nil, err
 	}
 	var sites []accessibleResource
 	seen := map[string]bool{}
@@ -61,6 +59,25 @@ func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL strin
 			seen[r.ID] = true
 			sites = append(sites, r)
 		}
+	}
+	return sites, nil
+}
+
+// isCloudSite reports whether a site's URL is a Jira Cloud one.
+func isCloudSite(siteURL string) bool {
+	u, err := url.Parse(siteURL)
+	return err == nil && strings.HasSuffix(u.Hostname(), ".atlassian.net")
+}
+
+// resolveCloudID calls getAccessibleAtlassianResources and returns the
+// single accessible site's cloudId and URL. A site can appear more than
+// once (once per scope bundle, seen in the spike), so the list is
+// de-duplicated by id first. Zero sites, several sites and a non-Cloud URL
+// each get their own error.
+func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL string, err error) {
+	sites, err := fetchSites(ctx, client)
+	if err != nil {
+		return "", "", err
 	}
 	switch len(sites) {
 	case 0:
@@ -76,8 +93,7 @@ func resolveCloudID(ctx context.Context, client *http.Client) (id, siteURL strin
 		}
 		return "", "", errMultipleSites{names: names}
 	}
-	u, err := url.Parse(sites[0].URL)
-	if err != nil || !strings.HasSuffix(u.Hostname(), ".atlassian.net") {
+	if !isCloudSite(sites[0].URL) {
 		return "", "", errNotCloud
 	}
 	return sites[0].ID, sites[0].URL, nil
