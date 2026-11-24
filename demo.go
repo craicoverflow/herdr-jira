@@ -287,6 +287,17 @@ func (d demoSource) assign(_ context.Context, key, accountID string) error {
 	return d.save(all)
 }
 
+// addComment posts locally: the comment is kept in the demo state, never sent.
+func (d demoSource) addComment(_ context.Context, key, body string) error {
+	_, all, i := d.find(key)
+	if i < 0 {
+		return fmt.Errorf("comment on %s: issue does not exist", key)
+	}
+	all[i].Comments = append(all[i].Comments, demoComment{Author: demoUser, Body: body, Ago: 0})
+	all[i].Updated = time.Now().UTC().Format("2006-01-02T15:04:05.000+0000")
+	return d.save(all)
+}
+
 func (demoSource) accountID(context.Context) (string, error) { return demoAccountID, nil }
 
 func (demoSource) userInfo(context.Context) (userInfo, error) {

@@ -227,6 +227,7 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 	scope := fs.String("scope", "issues", "")
 	query := fs.String("query", "", "")
 	row := fs.String("row", "", "")
+	jsonArg := fs.String("json", "", `comment: {"body": "markdown"}; without it the body is read from stdin`)
 	issueType := fs.String("type", "", "the issue's type, as last seen")
 	status := fs.String("status", "", "the issue's status, as last seen")
 	var branches stringList
@@ -321,6 +322,16 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 			return nil, err
 		}
 		return apiAssign(ctx, src, k)
+	case "comment":
+		k, err := key()
+		if err != nil {
+			return nil, err
+		}
+		body, err := commentBody(*jsonArg, apiStdin)
+		if err != nil {
+			return nil, err
+		}
+		return apiComment(ctx, src, k, body)
 	case "star":
 		k, err := key()
 		if err != nil {
@@ -696,6 +707,48 @@ func apiAssign(ctx context.Context, src apiSource, key string) (any, error) {
 	}
 	recordPatch(cachePatch{Op: patchMine, Row: t})
 	return map[string]any{"key": key, "issue": toAPIIssue(t)}, nil
+}
+
+// apiStdin is where `comment` reads its body when --json is absent; a seam
+// for tests.
+var apiStdin io.Reader = os.Stdin
+
+// commentBody is the comment text: from --json ({"body": "…"}) or, without
+// it, all of stdin. Blank is refused: Jira would reject it anyway.
+func commentBody(jsonArg string, stdin io.Reader) (string, error) {
+	body := ""
+	if jsonArg != "" {
+		var in struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(jsonArg), &in); err != nil {
+			return "", usageErr("comment: bad --json: %v", err)
+		}
+		body = in.Body
+	} else {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return "", usageErr("comment: reading stdin: %v", err)
+		}
+		body = string(data)
+	}
+	if strings.TrimSpace(body) == "" {
+		return "", usageErr("comment needs some text")
+	}
+	return body, nil
+}
+
+// apiComment posts body on key, then re-reads the issue so the reply carries
+// the comments as Jira now has them.
+func apiComment(ctx context.Context, src apiSource, key, body string) (any, error) {
+	if err := src.addComment(ctx, key, body); err != nil {
+		return nil, err
+	}
+	out := map[string]any{"key": key, "posted": true}
+	if detail, err := apiIssueDetail(ctx, src, key); err == nil {
+		out["issue"] = detail
+	}
+	return out, nil
 }
 
 // readBack reads key as it is just after a write. It asks for the issue

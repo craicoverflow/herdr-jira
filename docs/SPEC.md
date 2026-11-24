@@ -117,9 +117,14 @@ The app runs a mod's programs with a 30-second limit, so `api login` starts a
 detached sign-in worker that records its consent URL and outcome in
 `login.json`, and the mod polls `api session`. Lists use the plugin's caches
 and TTLs (`api issues|epics [--cached|--refresh]`), and
+`api comment KEY` posts a comment through `addCommentToJiraIssue`
+(`commentBody` as markdown, as the tool's format guide asks); the body comes
+from `--json '{"body": "…"}'` or stdin, a blank body is refused, and the reply
+carries the re-read issue so the mod shows Jira's own copy. Demo mode appends
+it to the pretend site only.
 `api transitions KEY --type … --status …` answers from the transitions cache
 (`--refresh` skips it). Changes made through the
-API (`transition`, `assign`, `star`) patch the cached rows in place, keeping
+API (`transition`, `assign`, `star`; `comment` changes only the detail) patch the cached rows in place, keeping
 each cache's fetch time, so the next paint is right without extending the TTL.
 `api tickets --branch …` replaces `tick` for the app: the same candidate-key
 confirmation, with statuses kept in `app_labels.json` so the TUI's `tick`
@@ -164,8 +169,9 @@ Statements below replace earlier ones in this document's history.
 
 - **Config-based auth-method swap.** Dropped once the MCP-as-standalone-client
   design proved to have no token-cost penalty.
-- **Full issue CRUD (comments, field edits).** This is a status-and-transition
-  tool first; broader editing dilutes the glance-and-act value.
+- **Full issue CRUD (field edits, editing or deleting comments).** This is a
+  status-and-transition tool first, plus adding a comment; broader editing
+  dilutes the glance-and-act value.
 - **Shared public Atlassian OAuth app.** An Atlassian Developer Console
   registration and maintenance commitment that should not block personal use.
 - **Push notifications (webhook relay).** Needs hosting outside the plugin's

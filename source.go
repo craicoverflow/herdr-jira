@@ -83,6 +83,8 @@ type jiraSource interface {
 	myEpics(ctx context.Context) (epics []ticketStatus, more bool, err error)
 	epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error)
 	assign(ctx context.Context, key, accountID string) error
+	// addComment posts body (markdown) as a new comment on key.
+	addComment(ctx context.Context, key, body string) error
 	// accountID returns the signed-in user's accountId, caching it the same
 	// way ensureCloudID caches the cloud id. "Assign to me" needs this; the
 	// TUI command calls it through the source rather than touching
@@ -394,6 +396,25 @@ func (s *realJiraSource) assign(ctx context.Context, key, accountID string) erro
 	})
 	if err != nil {
 		return fmt.Errorf("assign %s: %w", key, err)
+	}
+	return checkToolResult(raw)
+}
+
+// addComment posts a comment through addCommentToJiraIssue. The tool takes
+// the body as markdown in commentBody (see getContentFormatGuide); the
+// body is sent as typed.
+func (s *realJiraSource) addComment(ctx context.Context, key, body string) error {
+	cloudID, err := ensureCloudID(ctx, s.client)
+	if err != nil {
+		return err
+	}
+	raw, err := callTool(ctx, s.client, "addCommentToJiraIssue", map[string]any{
+		"cloudId":      cloudID,
+		"issueIdOrKey": key,
+		"commentBody":  body,
+	})
+	if err != nil {
+		return fmt.Errorf("comment on %s: %w", key, err)
 	}
 	return checkToolResult(raw)
 }

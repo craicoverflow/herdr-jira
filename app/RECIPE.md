@@ -41,7 +41,16 @@ and statuses.
   buttons. Below that, a fields card (Assignee and Reporter with avatars,
   Priority, Updated, Created, Labels, the spaces on this ticket), then the
   description as markdown, sub-tasks or child issues as small bordered rows,
-  and the latest comments as bubbles beside avatars.
+  and the comments as bubbles beside avatars, newest first. Under them sits
+  the comment box: a 24 px avatar, then a `background` card with a 1 px
+  `border` (`accent` while focused, `blocked` after a failed post) around a
+  multi-line text area (3 rows, growing to 10; 12.5 px). Below it a 11 px
+  hint row (`⌘⏎` post, `esc` leave the draft) and a small blue "Comment"
+  button, disabled while the box is blank. A comment just posted shows at 65 %
+  opacity, dated "just now", until Jira's own copy replaces it. A failed post
+  puts a `blocked`-tinted line under the box with Jira's reason in plain
+  words. The footer shows the "m comment" pill in the legend; while the box
+  has the keyboard it shows `⌘⏎ post` and `esc leave the draft`.
 - **Footer, 32 px**: key caps and labels for the current mode, or the last
   notice ("WEB-143 is now In Progress", a check in `done`, an alert in
   `blocked`).

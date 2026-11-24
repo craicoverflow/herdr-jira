@@ -14,7 +14,7 @@
 // the width it gets.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
 import { spaces, panes, focused, theme, props, closeOverlay, run, notify, knownAgents, home, nextCommand } from "herdr";
 import { api } from "./api.js";
 import * as M from "./model.js";
@@ -65,6 +65,11 @@ export default class Jira extends View {
     this.staleTransitions = new Set(); // keys whose next transitions load asks Jira
     this.busy = new Map(); // key -> what's running ("status", "assign", "star")
     this.menu = null; // { key, at } while the status menu is open
+    this.boxes = new Map(); // key -> the comment box (its text is the draft, kept while the mod is open)
+    this.commenting = null; // the key whose comment box has the keyboard
+    this.pendingComments = new Map(); // key -> comments posted here that the issue hasn't returned yet
+    this.commentSt = new Map(); // key -> { busy, error }
+    this.commentSeq = 0;
     this.sheet = null; // { kind: "start" | "help", ... }
     this.notice = null;
 
@@ -225,11 +230,13 @@ export default class Jira extends View {
     const prev = this.details.get(key);
     this.details.set(key, { ...prev, loading: true, error: null });
     const session = this.gen.stamp("session");
+    const began = Date.now();
     cx.spawn(async (cx) => {
       const r = await api("issue", key);
       if (!this.gen.same("session", session)) return;
       if (r.ok) {
         this.details.set(key, { data: r.data, at: Date.now(), loading: false });
+        this.reconcileComments(key, r.data, began);
         if (r.data.level > 0 && !this.children.has(key)) this.loadChildren(key, cx);
         // The menu may have opened on a list row's older status.
         if (this.menu?.key === key || this.sheet?.issue?.key === key) this.loadTransitions(key, cx);
@@ -594,6 +601,88 @@ export default class Jira extends View {
     });
   }
 
+  // ---- comments ---------------------------------------------------------------
+
+  commentBox(key) {
+    let b = this.boxes.get(key);
+    if (b) return b;
+    b = TextareaState.new({ placeholder: "Add a comment (markdown)" });
+    b.set_auto_grow(3, 10);
+    b.on("focus", (_e, cx) => { this.commenting = key; cx.notify(); });
+    b.on("blur", (_e, cx) => { if (this.commenting === key) this.commenting = null; cx.notify(); });
+    b.on("change", (_e, cx) => {
+      const st = this.commentSt.get(key);
+      if (st?.error) this.commentSt.set(key, { ...st, error: "" });
+      cx.notify();
+    });
+    // Enter writes a new line; cmd/ctrl+enter posts.
+    b.on("submit", (e, cx) => {
+      if (e?.secondary) this.postComment(key, cx);
+      else if (!e?.shift) b.replace("\n");
+      cx.notify();
+    });
+    this.boxes.set(key, b);
+    return b;
+  }
+
+  // `m`: the keyboard goes to the current issue's comment box.
+  focusComment(cx) {
+    const key = this.current()?.key;
+    if (!key) return;
+    this.commentBox(key);
+    if (!this.wide) this.narrowDetail = true;
+    if (!this.details.has(key)) this.loadDetail(key, cx);
+    cx.timer.after(40, () => { if (this.current()?.key === key && !this.sheet && !this.menu) this.commentBox(key).focus(); });
+  }
+
+  leaveComment() {
+    const b = this.commenting && this.boxes.get(this.commenting);
+    if (b) b.blur(); // the draft stays in the box
+    this.commenting = null;
+    this.handle.focus();
+  }
+
+  // Drops the posted comments the fresh read of the issue now covers.
+  reconcileComments(key, data, fetchedAt) {
+    const list = this.pendingComments.get(key);
+    if (!list?.length) return;
+    const kept = M.stillPending(data?.comments, list, fetchedAt);
+    if (kept.length) this.pendingComments.set(key, kept);
+    else this.pendingComments.delete(key);
+  }
+
+  postComment(key, cx) {
+    const box = this.commentBox(key);
+    const text = box.value();
+    if (!M.canPost(text) || this.commentSt.get(key)?.busy) return;
+    const mine = { id: ++this.commentSeq, author: this.me?.name ?? "You", created: new Date().toISOString(), body: text };
+    this.pendingComments.set(key, [...(this.pendingComments.get(key) ?? []), mine]);
+    this.commentSt.set(key, { busy: true, error: "" });
+    box.set_value("");
+    const session = this.gen.stamp("session");
+    cx.spawn(async (cx) => {
+      const r = await api("comment", key, "--json", JSON.stringify({ body: text }));
+      if (!this.gen.same("session", session)) return;
+      if (!r.ok) {
+        // Back into the box (ahead of anything typed since): the text is never lost.
+        this.pendingComments.set(key, (this.pendingComments.get(key) ?? []).filter((p) => p.id !== mine.id));
+        const now = box.value();
+        box.set_value(now.trim() ? `${text}\n\n${now}` : text);
+        this.commentSt.set(key, { busy: false, error: M.commentError(r.error) });
+        this.authFailed(r.error);
+      } else {
+        this.commentSt.set(key, { busy: false, error: "" });
+        this.pendingComments.set(key, (this.pendingComments.get(key) ?? []).map((p) => (p.id === mine.id ? { ...p, postedAt: Date.now() } : p)));
+        if (r.data.issue) {
+          this.details.set(key, { data: r.data.issue, at: Date.now(), loading: false });
+          this.reconcileComments(key, r.data.issue, Date.now());
+        } else this.loadDetail(key, cx);
+        this.say(`Commented on ${key}`, "success", cx);
+      }
+      cx.notify();
+    });
+  }
+
   assign(key, cx) {
     if (!key || this.busy.has(key)) return;
     const d = this.details.get(key)?.data;
@@ -827,6 +916,11 @@ export default class Jira extends View {
     }
     if (this.menu) return this.menuKey(k, cx);
 
+    if (this.commenting) {
+      if (k === "escape") { this.leaveComment(); return true; }
+      return false; // typing
+    }
+
     if (this.typing) {
       if (k === "escape") {
         if (this.query) this.clearSearch();
@@ -851,6 +945,7 @@ export default class Jira extends View {
       case "t": this.openMenu(key, cx); break;
       case "a": this.assign(key, cx); break;
       case "b": this.openStart(issue, cx); break;
+      case "m": if (!issue) return false; this.focusComment(cx); break;
       case "s": this.star(issue, cx); break;
       case "c": this.copyKey(key, cx); break;
       case "o": this.browse(key, cx); break;
@@ -1224,12 +1319,33 @@ export default class Jira extends View {
       .when(kind === "epic", (el) => el.child(section("Child issues", kids?.list?.length ?? null,
         kids?.list ? (kids.list.length ? v_flex().gap(4).children(kids.list.slice(0, 50).map((s) => miniRow(s, `jira-kid-${s.key}`))) : div().text_size(12.5).text_color(t.dim).child("No child issues."))
           : kids?.error ? this.inlineError(t, kids.error, () => this.loadChildren(issue.key, cx, true)) : this.shimmer(t, 240))))
-      .when((d?.comments?.length ?? 0) > 0, (el) => el.child(section("Latest comments", d.comments.length, v_flex().gap(10).children(d.comments.slice().reverse().map((c, n) =>
-        h_flex().gap(10).items_start()
-          .child(avatar(c.author || "?", 24))
-          .child(v_flex().flex_1().min_w(0).gap(4).p(10).rounded(9).bg(t.background).border_1().border_color(t.border)
-            .child(h_flex().gap(6).items_center().text_size(12).child(div().font_semibold().child(c.author || "Someone")).child(div().text_color(t.dim).child(`${M.ago(c.created)} ago`)))
-            .child(div().text_size(12.5).child(TextView.markdown(`jira-c-${issue.key}-${n}`, c.body || "_(empty)_").selectable(true).on_link_click((url, cx) => cx.open_url(url))))))))));
+      .child(this.commentsView(t, issue.key, d, section));
+  }
+
+  commentsView(t, key, d, section) {
+    const all = M.mergeComments(d?.comments, this.pendingComments.get(key));
+    const list = all.length === 0 ? null : v_flex().gap(10).children(all.slice().reverse().map((c, n) =>
+      h_flex().gap(10).items_start().when(Boolean(c.pending), (el) => el.opacity(0.65))
+        .child(avatar(c.author || "?", 24))
+        .child(v_flex().flex_1().min_w(0).gap(4).p(10).rounded(9).bg(t.background).border_1().border_color(t.border)
+          .child(h_flex().gap(6).items_center().text_size(12).child(div().font_semibold().child(c.author || "Someone"))
+            .child(div().text_color(t.dim).child(c.pending ? "just now" : `${M.ago(c.created)} ago`)))
+          .child(div().text_size(12.5).child(TextView.markdown(`jira-c-${key}-${c.pending ? "p" : ""}${n}`, c.body || "_(empty)_").selectable(true).on_link_click((url, cx) => cx.open_url(url)))))));
+    const box = this.commentBox(key);
+    const st = this.commentSt.get(key);
+    const focused = this.commenting === key;
+    const ready = M.canPost(box.value());
+    const compose = h_flex().gap(10).items_start()
+      .child(avatar(this.me?.name ?? "Me", 24))
+      .child(v_flex().flex_1().min_w(0).gap(6)
+        .child(div().id(`jira-comment-box-${key}`).px(10).py(8).rounded(9).bg(t.background).border_1().border_color(st?.error ? t.blocked : focused ? t.accent : t.border)
+          .child(Textarea.new(box).w_full().text_size(12.5).text_color(t.foreground)))
+        .when(Boolean(st?.error), (el) => el.child(h_flex().gap(8).px(10).py(8).rounded(8).bg(t.blocked + "1a").text_size(12)
+          .child(icon("alert").size(13).flex_none().text_color(t.blocked)).child(div().flex_1().min_w(0).child(st.error))))
+        .child(h_flex().gap(8).items_center()
+          .child(h_flex().flex_1().gap(5).items_center().text_size(11).text_color(t.dim).child(kbd(t, "⌘⏎")).child("post").child(kbd(t, "esc")).child("leave the draft"))
+          .child(button(t, `jira-comment-post-${key}`, { label: "Comment", kind: "brand", size: "sm", disabled: !ready, busy: Boolean(st?.busy), onClick: (_e, cx) => { this.postComment(key, cx); cx.notify(); } }))));
+    return section("Comments", all.length || null, v_flex().gap(12).when(Boolean(list), (el) => el.child(list)).child(compose));
   }
 
   statusMenuView(t, key) {
@@ -1269,10 +1385,12 @@ export default class Jira extends View {
   }
 
   footer(t) {
-    const legend = this.typing
+    const legend = this.commenting
+      ? [["⌘⏎", "post"], ["esc", "leave the draft"]]
+      : this.typing
       ? [["↑↓", "move"], ["⏎", "open"], ["esc", "clear"]]
       : this.wide
-        ? [["↑↓", "move"], ["⏎", this.current() && M.typeKind(this.current()) === "epic" && !this.drill && !this.pinned ? "children" : "open"], ["/", "search"], ["t", "status"], ["a", "assign"], ["b", "start work"], ["?", "keys"]]
+        ? [["↑↓", "move"], ["⏎", this.current() && M.typeKind(this.current()) === "epic" && !this.drill && !this.pinned ? "children" : "open"], ["/", "search"], ["t", "status"], ["a", "assign"], ["b", "start work"], ["m", "comment"], ["?", "keys"]]
         : [["↑↓", "move"], ["⏎", "open"], ["/", "search"], ["?", "keys"]];
     const n = this.notice;
     const color = n?.level === "error" ? t.blocked : n?.level === "success" ? t.done : t.muted;
@@ -1280,7 +1398,8 @@ export default class Jira extends View {
       .when(Boolean(n), (el) => el.child(h_flex().flex_1().min_w(0).gap(6).items_center().text_color(color)
         .child(icon(n.level === "error" ? "alert" : "check").size(12).flex_none()).child(div().truncate().text_color(t.foreground).child(n.text))))
       .when(!n, (el) => el.child(h_flex().flex_1().min_w(0).gap(12).items_center().overflow_hidden().children(legend.map(([k, label]) =>
-        h_flex().flex_none().gap(5).items_center().child(kbd(t, k)).child(label)))));
+        h_flex().id(`jira-key-${k}`).flex_none().gap(5).items_center().child(kbd(t, k)).child(label)
+          .when(k === "m", (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.focusComment(cx); cx.notify(); }))))));
   }
 
   // ---- sheets --------------------------------------------------------------------
@@ -1298,7 +1417,7 @@ export default class Jira extends View {
   helpSheet(t, card) {
     const keys = [
       ["↑ ↓  j k", "move through the list"], ["⏎", "open (an epic lists its children)"], ["/", "search: filters at once, then asks Jira"],
-      ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"],
+      ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"], ["m", "comment (⌘⏎ posts, esc leaves the draft)"],
       ["s", "star or unstar an epic"], ["c", "copy the key"], ["o", "open in Jira"], ["i", "this space's ticket"],
       ["1  2  tab", "Issues / Epics"], ["r", "refresh"], ["p", "open as a pane (dialog only)"], ["esc", "back, clear, close"],
     ];

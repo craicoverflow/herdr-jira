@@ -40,6 +40,8 @@ type fakeJiraSource struct {
 	epicChildrenErr    error
 	assignCalls        []string // issue keys passed to assign, in order
 	assignErr          error
+	commentCalls       [][2]string // key, body passed to addComment
+	commentErr         error
 	accountIDResult    string
 	accountIDErr       error
 }
@@ -66,6 +68,11 @@ func (f *fakeJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ti
 func (f *fakeJiraSource) assign(ctx context.Context, key, accountID string) error {
 	f.assignCalls = append(f.assignCalls, key)
 	return f.assignErr
+}
+
+func (f *fakeJiraSource) addComment(ctx context.Context, key, body string) error {
+	f.commentCalls = append(f.commentCalls, [2]string{key, body})
+	return f.commentErr
 }
 
 func (f *fakeJiraSource) myIssues(ctx context.Context) ([]ticketStatus, []ticketStatus, bool, bool, error) {
