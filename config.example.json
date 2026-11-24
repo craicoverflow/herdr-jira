@@ -1,3 +1,9 @@
 {
-  "label_refresh_seconds": 60
+  "label_refresh_seconds": 60,
+  "views": [
+    { "builtin": "my-work" },
+    { "builtin": "epics" },
+    { "name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done" },
+    { "name": "Triage", "filter": 10234, "group_by": "none" }
+  ]
 }

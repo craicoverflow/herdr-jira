@@ -1,7 +1,7 @@
 # Jira
 
 Your Jira Cloud issues in a Herdr dialog, or in a pane beside your terminals:
-Issues and Epics in headed lanes, the ticket your space's branch names pinned
+Tabs (views) of status-headed lanes, the ticket your space's branch names pinned
 on top, and a detail pane where you change status, assign the issue to
 yourself, or start work on it in a new worktree space with an agent.
 
@@ -23,8 +23,12 @@ and statuses.
   - *This space* card: a 9 px-radius card with a 7 px space-color square,
     "THIS SPACE · <space> · <branch>" at 10.5 px dim, then the issue row. Accent
     border while it is the one shown.
-  - Segmented tabs: Issues and Epics with count pills, on `raised`. The active
-    tab is a `background` pill with a border and a small shadow.
+  - Segmented tabs, one per configured view (My work by default), with count
+    pills, on `raised`. The active tab is a `background` pill with a border and
+    a small shadow. Up to four share the row equally; more keep their natural
+    width and scroll sideways, the active one kept in view. Keys `1`-`9` and
+    `tab` switch. A dismissible amber note under the tabs says why config
+    entries were skipped.
   - Search box, 34 px: a search glyph, the input, and a `/` key cap. A spinner
     shows while Jira answers.
   - A virtual list of lanes. Headings are 32 px, uppercase 10.5 px dim, with a
@@ -65,7 +69,7 @@ and statuses.
   Jira confirms one. Arrow keys or a click move to the lists. The detail
   follows the selection after it rests for 140 ms.
 - `/` focuses the search: lanes filter at once, and after 300 ms Jira is
-  searched for the tab's types (key prefix for `PROJ-12`, summary otherwise).
+  searched within the tab's JQL (key prefix for `PROJ-12`, summary otherwise).
   Hits fill a Search results lane without repeating rows. `esc` clears it.
 - `t`, or a click on the lozenge, opens a "MOVE TO" list under it with the
   issue's transitions (kept a day per workflow step). `↑↓` and `enter` move
@@ -115,9 +119,10 @@ and statuses.
 ## Done when
 
 - `herdr-app check mods/jira` passes, and the dialog opens with `cmd-j`.
-- With `herdr-jira app install --demo`, the Issues tab shows 8 rows with
-  WEB-143 and WEB-144 indented under WEB-142, and the Epics tab shows 2
-  assigned and 1 starred (PLAT-20 is Done and hidden).
+- With `herdr-jira app install --demo`, the tabs are My work, Team bugs (custom
+  JQL), Platform (a saved filter, ungrouped) and Epics. My work groups under IN
+  PROGRESS, IN REVIEW and TO DO with WEB-143 and WEB-144 indented under
+  WEB-142; Epics shows 2 assigned and 1 starred (PLAT-20 is Done and hidden).
 - A space on branch `WEB-142-…` shows the This space card and a chip on the
   WEB-142 row.
 - `t`, `↓`, `enter` on WEB-143 moves it, and the row, the detail and the footer

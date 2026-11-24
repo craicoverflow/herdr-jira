@@ -23,16 +23,29 @@ export function matches(issue, filter) {
   return issue.key.toLowerCase().includes(f) || (issue.summary ?? "").toLowerCase().includes(f);
 }
 
+// A view is one tab: { id, name, kind: "my-work" | "epics" | "jql", groupBy:
+// "status" | "none" }, as the helper's session lists them.
+export const DEFAULT_VIEW = { id: "my-work", name: "My work", kind: "my-work", groupBy: "status" };
+
+// What an empty view says: My work and Epics have their own words, a custom
+// view names itself.
+export const emptyNote = (view) => (view.kind === "my-work" ? NOTE_NO_ISSUES : view.kind === "epics" ? NOTE_NO_EPICS : `Nothing matches ${view.name}.`);
+
 // A row is { kind: "head", lane, count, more } | { kind: "note", text } |
 // { kind: "issue" | "subtask" | "epic", issue, depth, starred, lane }.
 // Every row has a unique `id` for the list.
 //
-// tab: "issues" | "epics". data: { issues, subtasks, issuesMore, subtasksMore }
-// for issues, { epics, more, starred, starredKeys } for epics (either may be
-// null while loading). hits: null (no answer yet) or the search results.
-export function buildRows(tab, data, filter = "", hits = null) {
+// data: { issues, subtasks, issuesMore, subtasksMore } for My work and custom
+// views, { epics, more, starred, starredKeys } for Epics (either may be null
+// while loading). hits: null (no answer yet) or the search results.
+//
+// My work and custom views group under status headings unless groupBy is
+// "none": In Progress-type statuses first (one heading per status name), then
+// To Do-type, then anything else. Within a heading, the latest update first.
+export function buildRows(view, data, filter = "", hits = null) {
   const rows = [];
   const shown = new Set();
+  const isEpics = view.kind === "epics";
   const note = (text, lane) => rows.push({ kind: "note", text, id: `note:${lane}` });
   const addLane = (lane, body, more, empty) => {
     if (body.length === 0 && filter) return;
@@ -44,8 +57,29 @@ export function buildRows(tab, data, filter = "", hits = null) {
     }
   };
 
-  if (tab === "issues") {
-    if (data) addLane(LANE_ASSIGNED, issueRows(data.issues ?? [], data.subtasks ?? [], filter), data.issuesMore || data.subtasksMore, NOTE_NO_ISSUES);
+  if (!isEpics) {
+    if (data) {
+      const more = Boolean(data.issuesMore || data.subtasksMore) && !filter;
+      const body = issueRows(data.issues ?? [], data.subtasks ?? [], filter, view.groupBy !== "none");
+      if (view.groupBy === "none") {
+        for (const r of body) {
+          rows.push({ ...r, lane: view.name, id: `${view.name}:${r.issue.key}` });
+          shown.add(r.issue.key);
+        }
+        if (!body.length && !filter) note(emptyNote(view), "empty");
+        else if (more) note(`Showing the first ${body.length}. Narrow the view's query to see the rest.`, "more");
+      } else if (!body.length) {
+        if (!filter) note(emptyNote(view), "empty");
+      } else {
+        for (const g of groupByStatus(body)) {
+          rows.push({ kind: "head", lane: g.status, count: g.rows.length, more, id: `head:${g.status}` });
+          for (const r of g.rows) {
+            rows.push({ ...r, lane: g.status, id: `${g.status}:${r.issue.key}` });
+            shown.add(r.issue.key);
+          }
+        }
+      }
+    }
   } else if (data) {
     const starredKeys = new Set(data.starredKeys ?? []);
     const assigned = new Set((data.epics ?? []).map((e) => e.key));
@@ -60,24 +94,71 @@ export function buildRows(tab, data, filter = "", hits = null) {
 
   if (hits) {
     const starredKeys = new Set(data?.starredKeys ?? []);
-    const body = hits.filter((h) => !isDone(h) && !shown.has(h.key)).map((h) => {
-      const kind = tab === "epics" ? "epic" : h.level < 0 ? "subtask" : "issue";
+    // My work and Epics never list Done work; a custom view's query decides.
+    const keep = (h) => view.kind === "jql" || !isDone(h);
+    const body = hits.filter((h) => keep(h) && !shown.has(h.key)).map((h) => {
+      const kind = isEpics ? "epic" : h.level < 0 ? "subtask" : "issue";
       return { kind, issue: h, depth: 0, starred: kind === "epic" && starredKeys.has(h.key) };
     });
     // The results lane is Jira's answer to the query, so it keeps its heading
     // even when it is empty.
     rows.push({ kind: "head", lane: LANE_RESULTS, count: body.length, more: false, id: `head:${LANE_RESULTS}` });
-    if (body.length === 0) note(hits.some((h) => !isDone(h)) ? NOTE_NO_MORE : NOTE_NO_MATCHES, LANE_RESULTS);
+    if (body.length === 0) note(hits.some(keep) ? NOTE_NO_MORE : NOTE_NO_MATCHES, LANE_RESULTS);
     for (const r of body) rows.push({ ...r, lane: LANE_RESULTS, id: `${LANE_RESULTS}:${r.issue.key}` });
   }
   return rows;
 }
 
+// The tab's count pill: how many issues the view holds, with a + when Jira
+// has more than a page.
+export function viewCount(view, data) {
+  if (!data) return "";
+  if (view.kind !== "epics") return countLabel((data.issues?.length ?? 0) + (data.subtasks?.length ?? 0), data.issuesMore || data.subtasksMore);
+  const keys = new Set((data.epics ?? []).map((e) => e.key));
+  const starred = (data.starred ?? []).filter((e) => !isDone(e) && !keys.has(e.key) && (data.starredKeys ?? []).includes(e.key));
+  return countLabel((data.epics?.length ?? 0) + starred.length, data.more);
+}
+
+const CATEGORY_ORDER = { indeterminate: 0, new: 1, done: 3 };
+
+// Within a category: working statuses, then review-type ones, then the rest.
+function statusRank(name) {
+  const n = name.toLowerCase();
+  if (/progress|doing|develop/.test(n)) return 0;
+  if (/review|test|qa|verif|approv/.test(n)) return 1;
+  return 2;
+}
+
+// Splits issueRows output into one group per status, in heading order. A
+// sub-task listed under its parent stays with the parent.
+export function groupByStatus(body) {
+  const groups = new Map();
+  let current = null;
+  for (const r of body) {
+    if (r.depth === 0 || !current) {
+      const status = r.issue.status || "No status";
+      if (!groups.has(status)) groups.set(status, { status, category: r.issue.category, rows: [] });
+      current = groups.get(status);
+    }
+    current.rows.push(r);
+  }
+  const rank = (g) => CATEGORY_ORDER[g.category] ?? 2;
+  return [...groups.values()].sort((a, b) =>
+    rank(a) - rank(b) || statusRank(a.status) - statusRank(b.status) || a.status.localeCompare(b.status));
+}
+
+// Latest update first, keeping Jira's order for ties and missing times.
+export function byUpdated(list) {
+  const t = (i) => parseJiraTime(i.updated) ?? -Infinity;
+  return list.map((x, n) => [x, n]).sort(([a, i], [b, j]) => (t(b) === t(a) ? i - j : t(b) > t(a) ? 1 : -1)).map(([x]) => x);
+}
+
 // Each top-level issue followed by its sub-tasks (depth 1), then sub-tasks
-// whose parent isn't listed, at depth 0.
-export function issueRows(issues, subtasks, filter = "") {
-  const top = issues.filter((i) => matches(i, filter));
-  const subs = subtasks.filter((i) => matches(i, filter));
+// whose parent isn't listed, at depth 0. sort puts the latest update first.
+export function issueRows(issues, subtasks, filter = "", sort = false) {
+  const order = sort ? byUpdated : (x) => x;
+  const top = order(issues.filter((i) => matches(i, filter)));
+  const subs = order(subtasks.filter((i) => matches(i, filter)));
   const inTop = new Set(top.map((i) => i.key));
   const children = new Map();
   const orphans = [];
@@ -118,6 +199,15 @@ export function moveSelection(rows, from, step) {
   if (from < 0 || !idx.includes(from)) return step < 0 ? idx[idx.length - 1] : idx[0];
   const at = idx.indexOf(from);
   return idx[(at + step + idx.length) % idx.length];
+}
+
+// The view `step` places from the one with this id, wrapping. An unknown id
+// counts as before the first.
+export function cycleView(views, id, step) {
+  if (!views.length) return null;
+  const at = views.findIndex((v) => v.id === id);
+  if (at < 0) return views[step < 0 ? views.length - 1 : 0];
+  return views[(at + step + views.length) % views.length];
 }
 
 export const countLabel = (count, more) => `${count}${more ? "+" : ""}`;

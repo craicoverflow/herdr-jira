@@ -43,7 +43,25 @@ refused transition drops the project's lists, and refresh refetches.
 
 ## Current behaviour
 
-### Lanes and queries
+### Views (the app's tabs)
+
+The Herdr app's tabs are `views` in `config.json` (see `app/README.md`,
+"Tabs"). Without `views` the app shows My work only. The terminal popup keeps
+the fixed Issues and Epics tabs below.
+
+| View | Query | Grouping |
+|---|---|---|
+| `my-work` | `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC` (all types, sub-tasks nested under their parent) | status headings: `indeterminate` statuses first, then `new`; one heading per status name |
+| `epics` | the Epics rows below | Assigned to me, Starred |
+| `jql` | the entry's JQL as written | status headings, or none with `group_by: "none"` |
+| `filter` | `filter = <id>` | as `jql` |
+
+Search inside a view runs `(<view JQL without ORDER BY>) AND (summary ~ "q*")`
+(`key ~ "Q*"` for key-shaped text), keeping the view's ORDER BY. Each view is
+cached on its own, keyed by kind and query, for 30 minutes.
+`herdr-jira api view <id|index>` answers one; `api views` lists them.
+
+### Lanes and queries (terminal popup)
 
 Lane queries use `statusCategory != Done`, and `assignee = currentUser()`
 unless noted. They sort by `updated DESC` and are capped at one page of 50; a
@@ -179,7 +197,7 @@ Statements below replace earlier ones in this document's history.
 - **Jira Server / Data Center, multiple sites, multiple accounts.** The
   plugin signs in through the Atlassian MCP server, which is Cloud only.
 - **Starring non-epic issues; Jira's own stars and filters.**
-- **Configurable JQL, lanes, icons or hotkeys.** Added only if someone asks.
+- **Configurable lanes, icons or hotkeys.** Added only if someone asks. (Configurable JQL tabs exist in the Herdr app only: see Views.)
 
 ## Open questions
 
