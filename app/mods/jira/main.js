@@ -1042,7 +1042,10 @@ export default class Jira extends View {
       // The new issue belongs in the Issues or Epics tab when it is assigned
       // to this person; the helper put it in the cached lists the same way.
       if (r.data.assigned && !M.isDone(issue)) this.addMine(issue);
-      for (const tab of ["issues", "epics"]) { this.hits[tab] = null; this.hitsFor[tab] = null; }
+      for (const id of Object.keys(this.hits)) { this.hits[id] = null; this.hitsFor[id] = null; }
+      // Views that aren't "mine" (a team's query, a saved filter) may match the
+      // new issue too: refetch them in the background.
+      for (const v of this.views) if (v.kind !== "my-work" && v.kind !== "epics") this.loadTab(v.id, "refresh", cx);
       this.say(`Created ${issue.key}`, "success", cx);
       this.handle.focus();
       cx.notify();
