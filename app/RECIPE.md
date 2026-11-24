@@ -80,6 +80,16 @@ and statuses.
   `~/.herdr/worktrees/<repo>/<branch>`) or Switch branch (here), Assign to me,
   Move to In Progress, and an agent to start with the issue as its task. The
   agent's choice is remembered.
+- `n`, the header's **+** or the footer's "n new issue" pill opens the create
+  sheet (480 px, over the view): PROJECT (a picker showing key and name, a
+  scrolling list when open), ISSUE TYPE (chips with the type tile, for that
+  project's types), SUMMARY and DESCRIPTION (one-line fields), a checked
+  "Assign to me", then a refetch button, Cancel and Create issue. Validation
+  and Jira's refusals show in a `blocked` tinted bar in plain words. `enter`
+  creates, `esc` cancels, `r` (outside a field) refetches projects and types.
+  On success the sheet becomes a card: a green check, "Created KEY", the
+  summary, and Open (detail pane), Start work and Create another (the form
+  returns with its project and type kept).
 - `s` stars an epic (local only), `a` assigns to you, `c` copies the key, `o`
   opens Jira, `r` refreshes, `?` lists the keys and offers Sign out.
 - Signed out, the view is a "Connect Jira" card with Sign in with Atlassian.

@@ -421,3 +421,33 @@ export function commentError(error) {
   if (code === "no_helper" || code === "helper") return msg || "The Jira helper didn't answer. Your comment is kept.";
   return msg ? `Jira didn't take the comment: ${msg}` : "Jira didn't take the comment. Your comment is kept: try again.";
 }
+
+// ---- quick-create ---------------------------------------------------------------
+
+export const SUMMARY_MAX = 255;
+
+// What is wrong with the quick-create form, in plain words, or "".
+export function validateCreate({ project, type, summary }) {
+  const s = (summary ?? "").trim();
+  if (!project) return "Pick a project.";
+  if (!type) return "Pick an issue type.";
+  if (!s) return "Summary is required.";
+  if ([...s].length > SUMMARY_MAX) return `Summary can't be longer than ${SUMMARY_MAX} characters.`;
+  return "";
+}
+
+// The type the form starts on: the one it had (kept across projects and
+// "create another"), else the one last used, else a plain Task, Story, then
+// whatever isn't an epic, then the first.
+export function pickIssueType(types, current, last) {
+  const names = (types ?? []).map((t) => t.name);
+  for (const want of [current, last]) if (want && names.includes(want)) return want;
+  for (const want of ["Task", "Story"]) if (names.includes(want)) return want;
+  return (types ?? []).find((t) => !(t.level > 0))?.name ?? names[0] ?? null;
+}
+
+// The projects matching what was typed into the picker (key or name).
+export function filterProjects(projects, q) {
+  const f = (q ?? "").trim().toLowerCase();
+  return (projects ?? []).filter((p) => !f || p.key.toLowerCase().includes(f) || (p.name ?? "").toLowerCase().includes(f));
+}

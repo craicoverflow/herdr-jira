@@ -76,7 +76,7 @@ export default class Jira extends View {
     this.pendingComments = new Map(); // key -> comments posted here that the issue hasn't returned yet
     this.commentSt = new Map(); // key -> { busy, error }
     this.commentSeq = 0;
-    this.sheet = null; // { kind: "start" | "help", ... }
+    this.sheet = null; // { kind: "start" | "help" | "create", ... }
     this.notice = null;
 
     this.tickets = {};
@@ -834,6 +834,7 @@ export default class Jira extends View {
       "next-tab": () => this.cycleTab(1, cx),
       "prev-tab": () => this.cycleTab(-1, cx),
       keys: () => { this.sheet = { kind: "help" }; },
+      new: () => this.openCreate(cx),
     };
     actions[c]?.();
   }
@@ -942,6 +943,144 @@ export default class Jira extends View {
     cx.notify();
   }
 
+
+  // ---- Quick create --------------------------------------------------------------
+
+  openCreate(cx) {
+    if (!this.session?.signedIn) return;
+    const s = {
+      kind: "create", project: null, projects: null, types: null, type: null, assign: true,
+      error: "", loadError: "", typesError: "", busy: false, created: null, pickProject: false,
+      loadingProjects: true, loadingTypes: false, typing: false,
+      summary: InputState.new({ placeholder: "What needs doing?" }),
+      description: InputState.new({ placeholder: "Add a description (optional)" }),
+    };
+    for (const input of [s.summary, s.description]) {
+      input.on("change", (_e, cx) => { s.error = ""; cx.notify(); });
+      input.on("submit", (_e, cx) => this.runCreate(cx));
+      input.on("focus", (_e, cx) => { s.typing = true; cx.notify(); });
+      input.on("blur", (_e, cx) => { s.typing = false; cx.notify(); });
+    }
+    this.sheet = s;
+    this.menu = null;
+    cx.timer.after(60, () => { if (this.sheet === s && !s.created) s.summary.focus(); });
+    this.loadCreateMeta(s, false, cx);
+  }
+
+  // Projects (the helper caches them; refresh asks Jira), then the chosen
+  // project's issue types.
+  loadCreateMeta(s, refresh, cx) {
+    s.loadingProjects = true;
+    s.loadError = "";
+    const ticket = this.spaceTicket()?.issue?.key;
+    cx.spawn(async (cx) => {
+      const r = await api("projects", ...(refresh ? ["--refresh"] : []), ...(ticket ? ["--ticket", ticket] : []));
+      if (this.sheet !== s) return;
+      s.loadingProjects = false;
+      if (!r.ok) {
+        if (this.authFailed(r.error)) this.sheet = null;
+        else s.loadError = r.error.message;
+      } else {
+        s.projects = r.data.projects;
+        if (!s.project || !s.projects.some((p) => p.key === s.project)) s.project = r.data.default || null;
+        if (s.project) this.loadTypes(s, refresh, cx);
+        else s.loadError = "You can't create issues in any project on this site.";
+      }
+      cx.notify();
+    });
+  }
+
+  loadTypes(s, refresh, cx) {
+    const project = s.project;
+    s.loadingTypes = true;
+    s.typesError = "";
+    cx.spawn(async (cx) => {
+      const r = await api("issuetypes", project, ...(refresh ? ["--refresh"] : []));
+      if (this.sheet !== s || s.project !== project) return;
+      s.loadingTypes = false;
+      if (r.ok) {
+        s.types = r.data.types;
+        s.type = M.pickIssueType(s.types, s.type, this.stored("createType"));
+        if (!s.type) s.typesError = "This project has no issue types you can create here.";
+      } else if (this.authFailed(r.error)) this.sheet = null;
+      else s.typesError = r.error.message;
+      cx.notify();
+    });
+  }
+
+  pickProject(s, key, cx) {
+    s.pickProject = false;
+    if (s.project !== key) {
+      s.project = key;
+      s.types = null;
+      s.error = "";
+      this.loadTypes(s, false, cx);
+    }
+  }
+
+  runCreate(cx) {
+    const s = this.sheet;
+    if (!s || s.kind !== "create" || s.busy || s.created) return;
+    const summary = s.summary.value().trim();
+    const problem = M.validateCreate({ project: s.project, type: s.type, summary });
+    if (problem) { s.error = problem; return cx.notify(); }
+    const description = s.description.value().trim();
+    s.busy = true;
+    s.error = "";
+    cx.spawn(async (cx) => {
+      const r = await api("create", "--project", s.project, "--type", s.type, "--summary", summary,
+        ...(description ? ["--description", description] : []), ...(s.assign ? ["--assign-me"] : []));
+      s.busy = false;
+      if (!r.ok) {
+        if (this.authFailed(r.error)) this.sheet = null;
+        else s.error = r.error.message;
+        return cx.notify();
+      }
+      const issue = r.data.issue;
+      this.store("createType", s.type);
+      s.created = { ...r.data, issue };
+      // The new issue belongs in the Issues or Epics tab when it is assigned
+      // to this person; the helper put it in the cached lists the same way.
+      if (r.data.assigned && !M.isDone(issue)) this.addMine(issue);
+      for (const id of Object.keys(this.hits)) { this.hits[id] = null; this.hitsFor[id] = null; }
+      // Views that aren't "mine" (a team's query, a saved filter) may match the
+      // new issue too: refetch them in the background.
+      for (const v of this.views) if (v.kind !== "my-work" && v.kind !== "epics") this.loadTab(v.id, "refresh", cx);
+      this.say(`Created ${issue.key}`, "success", cx);
+      this.handle.focus();
+      cx.notify();
+    });
+    cx.notify();
+  }
+
+  createAnother(s, cx) {
+    s.created = null;
+    s.summary.set_value("");
+    s.description.set_value("");
+    cx.timer.after(60, () => { if (this.sheet === s) s.summary.focus(); });
+  }
+
+  // Keys while the form is open. Typing in a field is text; the rest are the
+  // form's own, or the success card's.
+  createKey(k, cx) {
+    const s = this.sheet;
+    if (k === "escape") {
+      if (s.pickProject) s.pickProject = false;
+      else if (!s.busy) { this.sheet = null; this.handle.focus(); }
+      return true;
+    }
+    if (s.created) {
+      if (k === "enter") { this.sheet = null; this.pin(s.created.issue, cx); this.handle.focus(); }
+      else if (k === "b") this.openStart(s.created.issue, cx);
+      else if (k === "n") this.createAnother(s, cx);
+      else return false;
+      return true;
+    }
+    if (k === "enter") { this.runCreate(cx); return true; }
+    if (k === "r" && !s.typing) { this.loadCreateMeta(s, true, cx); return true; }
+    return false;
+  }
+
   // ---- keys --------------------------------------------------------------------
 
   onKey(e, cx) {
@@ -956,6 +1095,7 @@ export default class Jira extends View {
   // One key, from the keyboard or a `jira.key:<k>` command. Returns whether
   // it did something (so the event stops here).
   handleKey(k, cx) {
+    if (this.sheet?.kind === "create") return this.createKey(k, cx);
     if (this.sheet) {
       if (k === "escape") { if (!this.sheet.busy) { this.sheet = null; this.handle.focus(); } return true; }
       if (this.sheet.kind === "help") { this.sheet = null; return true; }
@@ -1001,6 +1141,7 @@ export default class Jira extends View {
       case "c": this.copyKey(key, cx); break;
       case "o": this.browse(key, cx); break;
       case "r": this.refresh(cx); break;
+      case "n": this.openCreate(cx); break;
       case "i": this.handleKeyBrowsing("i", cx); break;
       case "p": if (!this.overlay) return false; this.openAsPane(); break;
       case "?": this.sheet = { kind: "help" }; break;
@@ -1092,6 +1233,7 @@ export default class Jira extends View {
         .when(Boolean(signedIn && this.siteHost()), (el) => el.child(div().text_size(11).text_color(t.dim).truncate().child(this.siteHost()))))
       .child(div().flex_1())
       .when(Boolean(signedIn && fetched && this.wide), (el) => el.child(div().text_size(11).text_color(t.dim).child(`Updated ${M.ago(fetched) === "now" ? "just now" : M.ago(fetched) + " ago"}`)))
+      .when(Boolean(signedIn), (el) => el.child(button(t, "jira-new", { iconName: "plus", kind: "ghost", tooltip: "New issue (n)", onClick: (_e, cx) => { this.openCreate(cx); cx.notify(); } })))
       .when(Boolean(signedIn), (el) => el.child(button(t, "jira-refresh", { iconName: "refresh", kind: "ghost", busy: loading, tooltip: "Refresh (r)", onClick: (_e, cx) => { this.refresh(cx); cx.notify(); } })))
       .when(Boolean(this.overlay && signedIn), (el) => el.child(button(t, "jira-pane", { iconName: "pane", kind: "ghost", tooltip: "Open as a pane (p)", onClick: () => this.openAsPane() })))
       .child(button(t, "jira-help", { iconName: "keyboard", kind: "ghost", tooltip: "Keys (?)", onClick: (_e, cx) => { this.sheet = { kind: "help" }; cx.notify(); } }))
@@ -1462,7 +1604,10 @@ export default class Jira extends View {
         .child(icon(n.level === "error" ? "alert" : "check").size(12).flex_none()).child(div().truncate().text_color(t.foreground).child(n.text))))
       .when(!n, (el) => el.child(h_flex().flex_1().min_w(0).gap(12).items_center().overflow_hidden().children(legend.map(([k, label]) =>
         h_flex().id(`jira-key-${k}`).flex_none().gap(5).items_center().child(kbd(t, k)).child(label)
-          .when(k === "m", (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.focusComment(cx); cx.notify(); }))))));
+          .when(k === "m", (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.focusComment(cx); cx.notify(); })))))
+        .child(h_flex().id("jira-new-pill").flex_none().h(20).pl(4).pr(8).gap(5).items_center().rounded_full().cursor_pointer().bg(t.raised)
+          .hover((x) => x.bg(t.hover)).text_color(t.muted).on_click((_e, cx) => { this.openCreate(cx); cx.notify(); })
+          .child(kbd(t, "n")).child("new issue")));
   }
 
   // ---- sheets --------------------------------------------------------------------
@@ -1474,13 +1619,86 @@ export default class Jira extends View {
     const card = v_flex().id("jira-sheet").w(s.kind === "help" ? 440 : 480).max_w_full().max_h_full()
       .rounded(12).bg(t.popover).border_1().border_color(t.border).shadow_xl().p(20).gap(14)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation());
-    return scrim.child(s.kind === "help" ? this.helpSheet(t, card) : this.startSheet(t, card, cx));
+    return scrim.child(s.kind === "help" ? this.helpSheet(t, card) : s.kind === "create" ? this.createSheet(t, card, cx) : this.startSheet(t, card, cx));
+  }
+
+  createSheet(t, card, cx) {
+    const s = this.sheet;
+    const label = (text) => div().text_size(11).font_semibold().text_color(t.dim).child(text);
+    const field = (child) => h_flex().h(34).px(10).gap(8).items_center().rounded(8).border_1().border_color(t.border).bg(t.background).child(child);
+    const header = (title, sub, iconName) => h_flex().gap(10).items_center()
+      .child(div().size(30).rounded(8).bg(t.solid).flex().items_center().justify_center().child(icon(iconName).size(15).text_color(t.solid_foreground)))
+      .child(v_flex().flex_1().min_w(0).child(div().text_size(15).font_semibold().child(title)).child(div().text_size(12).text_color(t.muted).truncate().child(sub)))
+      .child(kbd(t, "esc"));
+
+    if (s.created) {
+      const issue = s.created.issue;
+      return card
+        .child(h_flex().gap(10).items_center()
+          .child(div().size(30).rounded(15).bg(t.done + "26").flex().items_center().justify_center().child(icon("check").size(16).text_color(t.done)))
+          .child(v_flex().flex_1().min_w(0).child(div().text_size(15).font_semibold().child(`Created ${issue.key}`)).child(div().text_size(12).text_color(t.muted).truncate().child(issue.summary)))
+          .child(kbd(t, "esc")))
+        .child(h_flex().gap(8).items_center().flex_wrap()
+          .child(button(t, "jira-created-open", { label: "Open", iconName: "arrow-right", kind: "primary", onClick: (_e, cx) => { this.sheet = null; this.pin(issue, cx); this.handle.focus(); cx.notify(); } }))
+          .child(button(t, "jira-created-start", { label: "Start work", iconName: "play", onClick: (_e, cx) => { this.openStart(issue, cx); cx.notify(); } }))
+          .child(button(t, "jira-created-another", { label: "Create another", iconName: "plus", kind: "ghost", onClick: (_e, cx) => { this.createAnother(s, cx); cx.notify(); } })))
+        .child(h_flex().gap(14).text_size(11).text_color(t.dim)
+          .child(h_flex().gap(5).items_center().child(kbd(t, "⏎")).child("open"))
+          .child(h_flex().gap(5).items_center().child(kbd(t, "b")).child("start work"))
+          .child(h_flex().gap(5).items_center().child(kbd(t, "n")).child("another")));
+    }
+
+    const project = (s.projects ?? []).find((p) => p.key === s.project);
+    const projectBox = s.loadingProjects && !s.projects
+      ? h_flex().h(34).px(10).gap(8).items_center().text_size(12).text_color(t.dim).child(icon("spinner").size(12).spin(900)).child("Loading projects…")
+      : h_flex().id("jira-create-project").h(34).px(10).gap(8).items_center().rounded(8).border_1().border_color(s.pickProject ? t.accent : t.border).bg(t.background)
+        .cursor_pointer().hover((x) => x.border_color(t.accent)).on_click((_e, cx) => { if (s.projects?.length) s.pickProject = !s.pickProject; cx.notify(); })
+        .child(div().text_size(12.5).font_medium().child(project?.key ?? "—"))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(project?.name ?? ""))
+        .child(icon("chevron-down").size(14).flex_none().text_color(t.dim));
+    const projectList = v_flex().id("jira-create-projects").max_h(168).overflow_y_scrollbar().p(4).rounded(8).border_1().border_color(t.border).bg(t.background)
+      .children((s.projects ?? []).map((p) => h_flex().id(`jira-create-p-${p.key}`).h(30).px(8).gap(8).items_center().rounded(6).cursor_pointer()
+        .bg(p.key === s.project ? t.selected : t.background).hover((x) => x.bg(t.hover))
+        .on_click((_e, cx) => { this.pickProject(s, p.key, cx); cx.notify(); })
+        .child(div().w(48).flex_none().text_size(12).font_medium().child(p.key))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(p.name))));
+    const typeChip = (ty) => {
+      const on = ty.name === s.type;
+      return h_flex().id(`jira-create-t-${ty.name}`).h(28).px(9).gap(6).items_center().rounded(7).cursor_pointer().border_1()
+        .border_color(on ? t.accent : t.border).bg(on ? t.selected : t.background).text_size(12).hover((x) => x.border_color(t.accent))
+        .on_click((_e, cx) => { s.type = ty.name; s.error = ""; cx.notify(); })
+        .child(typeTile({ type: ty.name, level: ty.level }, 14)).child(ty.name);
+    };
+    const checked = s.assign;
+    const loadError = s.loadError || s.typesError;
+    return card
+      .child(header("New issue", project ? `${project.key} · ${project.name}` : "Create an issue in Jira", "plus"))
+      .child(v_flex().gap(6).child(label("PROJECT")).child(projectBox).when(s.pickProject, (el) => el.child(projectList)))
+      .child(v_flex().gap(6).child(label("ISSUE TYPE"))
+        .child(s.loadingTypes || (s.loadingProjects && !s.types)
+          ? h_flex().gap(8).items_center().text_size(12).text_color(t.dim).child(icon("spinner").size(12).spin(900)).child("Loading issue types…")
+          : h_flex().gap(6).flex_wrap().children((s.types ?? []).map(typeChip))))
+      .child(v_flex().gap(6).child(label("SUMMARY"))
+        .child(field(Input.new(s.summary).flex_1().h_full().text_size(12.5))))
+      .child(v_flex().gap(6).child(label("DESCRIPTION"))
+        .child(field(Input.new(s.description).flex_1().h_full().text_size(12.5))))
+      .child(h_flex().id("jira-create-assign").gap(10).items_center().py(4).cursor_pointer().on_click((_e, cx) => { s.assign = !s.assign; cx.notify(); })
+        .child(div().size(16).flex_none().rounded(4).border_1().border_color(checked ? t.accent : t.input ?? t.border).bg(checked ? t.accent : t.background)
+          .flex().items_center().justify_center().when(checked, (el) => el.child(icon("check").size(12).text_color(t.accent_foreground))))
+        .child(div().text_size(12.5).child("Assign to me")))
+      .when(Boolean(s.error || loadError), (el) => el.child(h_flex().gap(8).px(10).py(8).rounded(8).bg(t.blocked + "1a").text_size(12)
+        .child(icon("alert").size(13).flex_none().text_color(t.blocked)).child(div().flex_1().min_w(0).child(s.error || loadError))))
+      .child(h_flex().pt(4).gap(8).items_center()
+        .child(button(t, "jira-create-refresh", { iconName: "refresh", kind: "ghost", busy: s.loadingProjects && Boolean(s.projects), tooltip: "Refetch projects and types (r)", onClick: (_e, cx) => { this.loadCreateMeta(s, true, cx); cx.notify(); } }))
+        .child(div().flex_1())
+        .child(button(t, "jira-create-cancel", { label: "Cancel", kind: "ghost", onClick: (_e, cx) => { this.sheet = null; this.handle.focus(); cx.notify(); } }))
+        .child(button(t, "jira-create-go", { label: "Create issue", iconName: "plus", kind: "primary", busy: s.busy, disabled: !s.project || !s.type, onClick: (_e, cx) => this.runCreate(cx) })));
   }
 
   helpSheet(t, card) {
     const keys = [
       ["↑ ↓  j k", "move through the list"], ["⏎", "open (an epic lists its children)"], ["/", "search: filters at once, then asks Jira"],
-      ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"], ["m", "comment (⌘⏎ posts, esc leaves the draft)"],
+      ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"], ["m", "comment (⌘⏎ posts, esc leaves the draft)"], ["n", "new issue: project, type, summary (⏎ creates)"],
       ["s", "star or unstar an epic"], ["c", "copy the key"], ["o", "open in Jira"], ["i", "this space's ticket"],
       ["1-9  tab", "switch tabs (your views)"], ["r", "refresh"], ["p", "open as a pane (dialog only)"], ["esc", "back, clear, close"],
     ];

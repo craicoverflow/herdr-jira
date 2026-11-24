@@ -330,3 +330,57 @@ func demoViews() ([]viewDef, []string) {
 		{"builtin": "epics"}
 	]`))
 }
+
+// ---- quick-create ---------------------------------------------------------------
+
+var demoProjects = []jiraProject{{ID: "1", Key: "API", Name: "Platform API"}, {ID: "3", Key: "PLAT", Name: "Platform"}, {ID: "2", Key: "WEB", Name: "Storefront"}}
+
+func (demoSource) projects(context.Context) ([]jiraProject, error) {
+	return append([]jiraProject{}, demoProjects...), nil
+}
+
+func (demoSource) issueTypes(_ context.Context, project string) ([]jiraIssueType, error) {
+	for _, p := range demoProjects {
+		if strings.EqualFold(p.Key, project) {
+			return []jiraIssueType{{ID: "10", Name: "Task"}, {ID: "11", Name: "Story"}, {ID: "12", Name: "Bug"}, {ID: "13", Name: "Epic", Level: 1}}, nil
+		}
+	}
+	return nil, fmt.Errorf("create: project %q doesn't exist", project)
+}
+
+// createIssue adds the issue to the demo store, as the next number in its
+// project. Nothing leaves the machine.
+func (d demoSource) createIssue(_ context.Context, r createRequest, accountID string) (string, error) {
+	project := strings.ToUpper(strings.TrimSpace(r.Project))
+	known := false
+	for _, p := range demoProjects {
+		known = known || p.Key == project
+	}
+	if !known {
+		return "", fmt.Errorf("tool call failed: project %q doesn't exist", project)
+	}
+	level := 0
+	if strings.EqualFold(r.IssueType, "Epic") {
+		level = 1
+	}
+	all := d.load()
+	n := 199
+	for _, is := range all {
+		var num int
+		if p, rest, ok := strings.Cut(is.Key, "-"); ok && p == project {
+			if _, err := fmt.Sscanf(rest, "%d", &num); err == nil && num > n {
+				n = num
+			}
+		}
+	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000+0000")
+	is := demoIssue{Key: fmt.Sprintf("%s-%d", project, n+1), Summary: strings.TrimSpace(r.Summary), Status: "To Do", Type: r.IssueType,
+		Level: level, Reporter: demoUser, Priority: "Medium", Description: strings.TrimSpace(r.Description), Created: now, Updated: now}
+	if accountID != "" {
+		is.Assignee = demoUser
+	}
+	if err := d.save(append(all, is)); err != nil {
+		return "", err
+	}
+	return is.Key, nil
+}
