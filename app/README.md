@@ -27,11 +27,32 @@ and Start work's follow-ups. Stars stay on your machine.
 
 ## Install
 
-You need the `herdr-jira` binary: it signs you in to Atlassian and talks to
-Jira, and it carries the mod.
+Open the Herdr app once (so it has made its folder), then run:
 
 ```sh
-# Prebuilt or from source: anything that gives you the herdr-jira binary.
+curl -fsSL https://raw.githubusercontent.com/craicoverflow/herdr-jira/main/scripts/install-app.sh | sh
+```
+
+Press `cmd-j` in Herdr (`ctrl-shift-j` on Linux) to open it.
+
+The script ([`../scripts/install-app.sh`](../scripts/install-app.sh))
+downloads the `herdr-jira` binary for your platform (macOS or Linux, arm64 or
+amd64) from the latest GitHub release. It checks the binary's SHA-256 against
+the release's `checksums.txt` and runs `herdr-jira app install` with it. It
+needs no Go and puts nothing on your `PATH`, and the download is deleted
+afterwards. Running it again updates the mod to the latest release; if you're
+already on the latest, nothing changes.
+
+- **Options** go to `app install` after `sh -s --`. For example,
+  `… | sh -s -- --demo` installs the demo, and `… | sh -s -- --no-key` skips
+  the key binding.
+- **A given release:** `… | HERDR_JIRA_VERSION=v0.5.0 sh`.
+- **Uninstall:** `~/.config/herdr-app/mods/jira/.bin/herdr-jira app uninstall`
+  removes the mod and its key binding.
+
+**From a checkout** instead, build the binary and install with it:
+
+```sh
 sh scripts/build.sh            # in this repo: builds bin/herdr-jira
 ./bin/herdr-jira app install   # copies the mod in and binds cmd-j
 ```
