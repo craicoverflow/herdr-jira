@@ -19,11 +19,15 @@ The same Jira view, rebuilt for the [Herdr app](https://herdr.dev): a dialog
 (or a pane beside your terminals) with your issues and epics, a detail pane
 with the description and comments, live status changes, and **Start work**,
 which makes a worktree space for the issue and can start an agent on it. It
-shares this plugin's sign-in, caches and stars. See [`app/README.md`](app/README.md):
+shares this plugin's sign-in, caches and stars. Install it, or update it, with
+one line, then press `cmd-j` in Herdr:
 
 ```sh
-sh scripts/build.sh && ./bin/herdr-jira app install   # then press cmd-j in Herdr
+curl -fsSL https://raw.githubusercontent.com/craicoverflow/herdr-jira/main/scripts/install-app.sh | sh
 ```
+
+See [`app/README.md`](app/README.md) for what it does, other ways to install,
+and how to use it.
 
 ![Jira in the Herdr app](app/preview.png)
 

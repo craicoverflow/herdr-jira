@@ -25,8 +25,10 @@ import (
 // share one sign-in and one set of caches.
 
 // apiVersion is bumped when an op's shape changes, so a mod can tell an old
-// helper binary from a new one. 2: transitions takes --type and --status.
-const apiVersion = 2
+// helper binary from a new one. 2: transitions takes --type and --status. 3: session
+// and views list the configured tabs; the view op answers one. 4: projects,
+// issuetypes and create.
+const apiVersion = 4
 
 type apiReply struct {
 	OK    bool      `json:"ok"`
@@ -118,6 +120,11 @@ type apiSource interface {
 	jiraSource
 	getFull(ctx context.Context, key string) (issueFull, error)
 	userInfo(ctx context.Context) (userInfo, error)
+	// Quick-create: the projects and issue types a new issue can have, and the
+	// create itself (it returns the new key).
+	projects(ctx context.Context) ([]jiraProject, error)
+	issueTypes(ctx context.Context, project string) ([]jiraIssueType, error)
+	createIssue(ctx context.Context, r createRequest, accountID string) (string, error)
 }
 
 func (s *realJiraSource) userInfo(ctx context.Context) (userInfo, error) {
@@ -226,9 +233,17 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 	force := fs.Bool("force", false, "")
 	scope := fs.String("scope", "issues", "")
 	query := fs.String("query", "", "")
+	viewArg := fs.String("view", "", "a view's id or index")
+	viewDefArg := fs.String("def", "", "a view definition as JSON")
 	row := fs.String("row", "", "")
+	jsonArg := fs.String("json", "", `comment: {"body": "markdown"}; without it the body is read from stdin`)
 	issueType := fs.String("type", "", "the issue's type, as last seen")
 	status := fs.String("status", "", "the issue's status, as last seen")
+	project := fs.String("project", "", "project key")
+	summary := fs.String("summary", "", "new issue's summary")
+	description := fs.String("description", "", "new issue's description")
+	assignMe := fs.Bool("assign-me", false, "assign the new issue to me")
+	ticket := fs.String("ticket", "", "the space's ticket key, for the default project")
 	var branches stringList
 	fs.Var(&branches, "branch", "")
 	pos, err := parseInterleaved(fs, rest)
@@ -266,7 +281,23 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 		return apiIssues(ctx, src, mode)
 	case "epics":
 		return apiEpics(ctx, src, mode)
+	case "views":
+		views, notes := viewsFn()
+		return map[string]any{"views": views, "notes": nonNil(notes)}, nil
+	case "view":
+		v, err := viewArgOf(*viewDefArg, pos)
+		if err != nil {
+			return nil, err
+		}
+		return apiView(ctx, src, v, mode)
 	case "search":
+		if *viewArg != "" || *viewDefArg != "" {
+			v, err := viewArgOf(*viewDefArg, []string{*viewArg})
+			if err != nil {
+				return nil, err
+			}
+			return apiViewSearch(ctx, src, v, *query)
+		}
 		sc := scopeIssues
 		if *scope == "epics" {
 			sc = scopeEpics
@@ -321,12 +352,31 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 			return nil, err
 		}
 		return apiAssign(ctx, src, k)
+	case "comment":
+		k, err := key()
+		if err != nil {
+			return nil, err
+		}
+		body, err := commentBody(*jsonArg, apiStdin)
+		if err != nil {
+			return nil, err
+		}
+		return apiComment(ctx, src, k, body)
 	case "star":
 		k, err := key()
 		if err != nil {
 			return nil, err
 		}
 		return apiStar(ctx, src, k, *row)
+	case "projects":
+		return apiProjects(ctx, src, mode, *ticket)
+	case "issuetypes":
+		if len(pos) < 1 {
+			return nil, usageErr("issuetypes needs a project key")
+		}
+		return apiIssueTypes(ctx, src, pos[0], mode)
+	case "create":
+		return apiCreate(ctx, src, createRequest{Project: *project, IssueType: *issueType, Summary: *summary, Description: *description, AssignToMe: *assignMe})
 	case "tickets":
 		return apiTickets(ctx, src, branches, *force)
 	}
@@ -395,6 +445,8 @@ var (
 
 func apiSession() map[string]any {
 	out := map[string]any{"signedIn": false, "version": pluginVersion, "api": apiVersion}
+	views, notes := viewsFn()
+	out["views"], out["viewNotes"] = views, nonNil(notes)
 	if demoMode {
 		out["signedIn"], out["siteURL"], out["cloudId"], out["demo"] = true, demoSiteURL, demoCloudID, true
 		return out
@@ -612,6 +664,77 @@ func apiEpics(ctx context.Context, src apiSource, mode string) (any, error) {
 	return epicsReply(c, true, true), nil
 }
 
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// viewArgOf picks the view an op names: a --def JSON definition, else the
+// first positional (or --view) argument as an id or index.
+func viewArgOf(def string, pos []string) (viewDef, error) {
+	if def != "" {
+		return viewFromDef(def)
+	}
+	if len(pos) < 1 || pos[0] == "" {
+		return viewDef{}, usageErr("view needs a view id or index, or --def")
+	}
+	return findView(pos[0])
+}
+
+// apiView answers one tab with the same modes as apiIssues, in the same row
+// shape: issues, and sub-tasks apart from them. The epics view is the epics
+// op, whose shape is its own.
+func apiView(ctx context.Context, src apiSource, v viewDef, mode string) (any, error) {
+	if v.Kind == viewEpics {
+		return apiEpics(ctx, src, mode)
+	}
+	key := viewCacheKey(v)
+	c, hasCache := readViewCache(key)
+	if hasCache && !sameSite(c.CloudID, cloudIDFn()) {
+		c, hasCache = viewCacheEntry{}, false // another site's cache
+	}
+	fresh := hasCache && c.fresh()
+	if mode == "cached" || (mode == "auto" && fresh) {
+		return viewReply(v, c.Rows, c.More, c.FetchedAt, fresh, hasCache), nil
+	}
+	started := nowFn()
+	rows, more, err := src.runJQL(ctx, v.JQL, viewMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", v.Name, err)
+	}
+	rows = storeFetchedView(started, key, v, rows, more)
+	return viewReply(v, rows, more, nowFn(), true, true), nil
+}
+
+func viewReply(v viewDef, rows []ticketStatus, more bool, fetchedAt time.Time, fresh, cached bool) map[string]any {
+	issues, subtasks := splitCached(rows)
+	out := issuesReply(issues, subtasks, more, false, fetchedAt, fresh, cached)
+	out["view"] = v.ID
+	return out
+}
+
+// apiViewSearch asks Jira for the issues in a view that match a query.
+func apiViewSearch(ctx context.Context, src apiSource, v viewDef, query string) (any, error) {
+	query = strings.TrimSpace(query)
+	if v.Kind == viewEpics {
+		hits, err := src.searchScoped(ctx, query, scopeEpics)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"query": query, "view": v.ID, "hits": toAPIIssues(hits)}, nil
+	}
+	if query == "" {
+		return map[string]any{"query": query, "view": v.ID, "hits": []apiIssue{}}, nil
+	}
+	hits, _, err := src.runJQL(ctx, searchViewJQL(v.JQL, query), searchMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("search %q in %s: %w", query, v.Name, err)
+	}
+	return map[string]any{"query": query, "view": v.ID, "hits": toAPIIssues(hits)}, nil
+}
+
 func epicsReply(c epicsCache, fresh, cached bool) map[string]any {
 	keys := c.StarredKeys
 	if keys == nil {
@@ -696,6 +819,48 @@ func apiAssign(ctx context.Context, src apiSource, key string) (any, error) {
 	}
 	recordPatch(cachePatch{Op: patchMine, Row: t})
 	return map[string]any{"key": key, "issue": toAPIIssue(t)}, nil
+}
+
+// apiStdin is where `comment` reads its body when --json is absent; a seam
+// for tests.
+var apiStdin io.Reader = os.Stdin
+
+// commentBody is the comment text: from --json ({"body": "…"}) or, without
+// it, all of stdin. Blank is refused: Jira would reject it anyway.
+func commentBody(jsonArg string, stdin io.Reader) (string, error) {
+	body := ""
+	if jsonArg != "" {
+		var in struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(jsonArg), &in); err != nil {
+			return "", usageErr("comment: bad --json: %v", err)
+		}
+		body = in.Body
+	} else {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return "", usageErr("comment: reading stdin: %v", err)
+		}
+		body = string(data)
+	}
+	if strings.TrimSpace(body) == "" {
+		return "", usageErr("comment needs some text")
+	}
+	return body, nil
+}
+
+// apiComment posts body on key, then re-reads the issue so the reply carries
+// the comments as Jira now has them.
+func apiComment(ctx context.Context, src apiSource, key, body string) (any, error) {
+	if err := src.addComment(ctx, key, body); err != nil {
+		return nil, err
+	}
+	out := map[string]any{"key": key, "posted": true}
+	if detail, err := apiIssueDetail(ctx, src, key); err == nil {
+		out["issue"] = detail
+	}
+	return out, nil
 }
 
 // readBack reads key as it is just after a write. It asks for the issue

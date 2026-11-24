@@ -97,3 +97,21 @@ These need an account or a terminal that this session does not have.
 Result: **OPEN**. The design's gate asks for all of these except mouse before
 Stage 1. Stage 1 work can proceed in the meantime because none of it depends on
 their outcome, but they must be closed before the `v0.2.0` release.
+
+## Quick-create tools (HJ-3)
+
+`tools/list.json` lists names only, so the schemas below are what the helper
+sends and expects, written from Atlassian's published tool docs and **not yet
+confirmed against a live site** (no sign-in in this session):
+
+- `getVisibleJiraProjects {cloudId, action: "create", maxResults}` returns the
+  projects with create permission. The reply is read as either a bare array or
+  `{values: [...]}` / `{projects: [...]}` of `{id, key, name}`.
+- `getJiraProjectIssueTypesMetadata {cloudId, projectIdOrKey}`: read as
+  `{issueTypes: [...]}` or `{values: [...]}` of `{id, name, subtask,
+  hierarchyLevel}`. Sub-tasks are dropped (they need a parent).
+- `createJiraIssue {cloudId, projectKey, issueTypeName, summary, description?,
+  assignee_account_id?}`: description as plain text (markdown); reply `{key}`.
+
+Result: **OPEN**. Confirm the three on a real site; a required custom field
+shows as an error mapped to "needs X, create it in Jira".

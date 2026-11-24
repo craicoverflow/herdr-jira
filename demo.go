@@ -92,6 +92,8 @@ func demoSeed() []demoIssue {
 		{Key: "PLAT-20", Summary: "Kubernetes 1.34 upgrade", Status: "Done", Type: "Epic", Level: 1, Assignee: jo, Reporter: jo, Priority: "High", Created: h(3000), Updated: h(400)},
 		{Key: "WEB-180", Summary: "Mobile web performance", Status: "To Do", Type: "Epic", Level: 1, Assignee: priya, Reporter: priya, Priority: "Medium", Created: h(700), Updated: h(90)},
 		{Key: "WEB-171", Summary: "Search suggestions show deleted products", Status: "To Do", Type: "Bug", Assignee: priya, Reporter: jo, Priority: "High", Created: h(80), Updated: h(40)},
+		{Key: "WEB-165", Summary: "Cart badge count is stale after removing the last item", Status: "In Progress", Type: "Bug", Assignee: priya, Reporter: jo, Priority: "Medium", Created: h(50), Updated: h(5)},
+		{Key: "WEB-168", Summary: "Promo code field accepts trailing spaces", Status: "In Review", Type: "Bug", Assignee: sam, Reporter: priya, Priority: "Low", Created: h(70), Updated: h(14)},
 		{Key: "API-99", Summary: "Document the pagination tokens", Status: "To Do", Type: "Task", Parent: "API-70", Reporter: sam, Priority: "Low", Created: h(60), Updated: h(60)},
 		{Key: "PLAT-31", Summary: "Alert on p99 checkout latency", Status: "In Progress", Type: "Task", Parent: "PLAT-12", Assignee: jo, Reporter: jo, Priority: "Medium", Created: h(100), Updated: h(10)},
 	}
@@ -287,6 +289,17 @@ func (d demoSource) assign(_ context.Context, key, accountID string) error {
 	return d.save(all)
 }
 
+// addComment posts locally: the comment is kept in the demo state, never sent.
+func (d demoSource) addComment(_ context.Context, key, body string) error {
+	_, all, i := d.find(key)
+	if i < 0 {
+		return fmt.Errorf("comment on %s: issue does not exist", key)
+	}
+	all[i].Comments = append(all[i].Comments, demoComment{Author: demoUser, Body: body, Ago: 0})
+	all[i].Updated = time.Now().UTC().Format("2006-01-02T15:04:05.000+0000")
+	return d.save(all)
+}
+
 func (demoSource) accountID(context.Context) (string, error) { return demoAccountID, nil }
 
 func (demoSource) userInfo(context.Context) (userInfo, error) {
@@ -301,7 +314,73 @@ func enterDemo() {
 	cloudIDFn = func() string { return demoCloudID }
 	ensureCloudIDFn = func(context.Context) (string, error) { return demoCloudID, nil }
 	siteURLFn = func() (string, error) { return demoSiteURL, nil }
+	viewsFn = demoViews
 	if _, err := os.Stat(starStatePath()); os.IsNotExist(err) {
 		_ = writeStars(demoCloudID, []starEntry{{Key: "PLAT-12"}, {Key: "PLAT-20"}})
 	}
+}
+
+// demoViews are the demo site's tabs: My work, two custom queries (one a
+// saved filter) and Epics, so every kind shows.
+func demoViews() ([]viewDef, []string) {
+	return resolveViews(json.RawMessage(`[
+		{"builtin": "my-work"},
+		{"name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done"},
+		{"name": "Platform", "filter": 10234, "group_by": "none"},
+		{"builtin": "epics"}
+	]`))
+}
+
+// ---- quick-create ---------------------------------------------------------------
+
+var demoProjects = []jiraProject{{ID: "1", Key: "API", Name: "Platform API"}, {ID: "3", Key: "PLAT", Name: "Platform"}, {ID: "2", Key: "WEB", Name: "Storefront"}}
+
+func (demoSource) projects(context.Context) ([]jiraProject, error) {
+	return append([]jiraProject{}, demoProjects...), nil
+}
+
+func (demoSource) issueTypes(_ context.Context, project string) ([]jiraIssueType, error) {
+	for _, p := range demoProjects {
+		if strings.EqualFold(p.Key, project) {
+			return []jiraIssueType{{ID: "10", Name: "Task"}, {ID: "11", Name: "Story"}, {ID: "12", Name: "Bug"}, {ID: "13", Name: "Epic", Level: 1}}, nil
+		}
+	}
+	return nil, fmt.Errorf("create: project %q doesn't exist", project)
+}
+
+// createIssue adds the issue to the demo store, as the next number in its
+// project. Nothing leaves the machine.
+func (d demoSource) createIssue(_ context.Context, r createRequest, accountID string) (string, error) {
+	project := strings.ToUpper(strings.TrimSpace(r.Project))
+	known := false
+	for _, p := range demoProjects {
+		known = known || p.Key == project
+	}
+	if !known {
+		return "", fmt.Errorf("tool call failed: project %q doesn't exist", project)
+	}
+	level := 0
+	if strings.EqualFold(r.IssueType, "Epic") {
+		level = 1
+	}
+	all := d.load()
+	n := 199
+	for _, is := range all {
+		var num int
+		if p, rest, ok := strings.Cut(is.Key, "-"); ok && p == project {
+			if _, err := fmt.Sscanf(rest, "%d", &num); err == nil && num > n {
+				n = num
+			}
+		}
+	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000+0000")
+	is := demoIssue{Key: fmt.Sprintf("%s-%d", project, n+1), Summary: strings.TrimSpace(r.Summary), Status: "To Do", Type: r.IssueType,
+		Level: level, Reporter: demoUser, Priority: "Medium", Description: strings.TrimSpace(r.Description), Created: now, Updated: now}
+	if accountID != "" {
+		is.Assignee = demoUser
+	}
+	if err := d.save(append(all, is)); err != nil {
+		return "", err
+	}
+	return is.Key, nil
 }

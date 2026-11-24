@@ -6,12 +6,19 @@ shares its sign-in, caches and stars, so you can use both.
 
 ![Jira for Herdr](preview.png)
 
-- **Issues and Epics** in headed lanes: your open issues with sub-tasks under
-  their parent, your epics, and the epics you starred.
+- **Tabs you define** (see [Tabs](#tabs)): by default **My work**, everything
+  assigned to you that isn't Done, under status headings (In Progress-type
+  statuses first, then To Do) with counts and sub-tasks under their parent. Add
+  Epics, your own JQL or saved Jira filters.
 - **This space's ticket** at the top. The branch your space is on is matched to
   its Jira issue, and every row shows which spaces are working on it.
 - **A detail pane** with the description and the latest comments rendered as
   markdown, plus sub-tasks, child issues, parent, assignee, priority and labels.
+- **Add a comment** under the comments: `m` (or the "m comment" pill) focuses a
+  multi-line box; `⌘⏎`/`ctrl-⏎` posts it as markdown, `esc` leaves it. The
+  draft is kept per issue while the mod is open. The comment shows at once,
+  then gives way to Jira's copy; if Jira refuses, the text goes back in the box
+  with the reason.
 - **Change status** from the issue's transitions, as Jira lists them. Nothing
   is hardcoded. Each workflow step's list is kept for a day; `r` refetches.
 - **Start work**: a branch named after the issue, either as a new worktree
@@ -19,19 +26,75 @@ shares its sign-in, caches and stars, so you can use both.
   It can also assign the issue to you, move it to In Progress, and start an
   agent (Claude Code, Codex, anything Herdr knows) with the issue as its first
   message.
+- **Quick create**: `n` (or the **+** in the header, or the "n new issue" pill in
+  the footer) opens a compact form: project, issue type, summary, an optional
+  description and "Assign to me" (on by default). `enter` creates, `esc` cancels.
+  The project starts as your space's ticket's, else the last one you created in,
+  else the first. Projects and issue types are cached for six hours; `r` in the
+  form refetches. After creating you can open the issue, start work on it, or
+  create another (the form keeps its project and type).
 - **Search** filters your lanes as you type, then asks Jira for matches.
 - **Mouse and keys** throughout, with a legend in the footer and `?` for all keys.
 
-**It writes to Jira** when you ask it to: status changes, assigning to you,
-and Start work's follow-ups. Stars stay on your machine.
+**It writes to Jira** when you ask it to: creating an issue, status changes,
+assigning to you, and Start work's follow-ups. Stars stay on your machine.
+
+## Tabs
+
+Tabs come from the optional `views` list in the helper's `config.json`
+(`~/.config/herdr/plugins/config/herdr-jira/config.json`). Without it you get
+just **My work**.
+
+```json
+{
+  "views": [
+    { "builtin": "my-work" },
+    { "builtin": "epics" },
+    { "name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done" },
+    { "name": "Triage", "filter": 10234, "group_by": "none" }
+  ]
+}
+```
+
+- `{"builtin": "my-work"}`: assigned to you, not Done, any type (epics show as
+  ordinary rows), grouped by status, latest update first.
+- `{"builtin": "epics"}`: your epics and the ones you starred. Opt-in.
+- `{"name", "jql"}`: any JQL. `{"name", "filter"}` runs a saved filter as
+  `filter = <id>`.
+- `group_by`: `"status"` (default) or `"none"` (Jira's order, no headings).
+- Each tab shows one page of 50 (`50+`). Search filters the tab at once, then
+  asks Jira within the tab's JQL. Invalid entries are skipped and a note in the
+  app says why; the app never fails over config.
+- Many tabs scroll sideways; `1`-`9` and `tab` switch.
 
 ## Install
 
-You need the `herdr-jira` binary: it signs you in to Atlassian and talks to
-Jira, and it carries the mod.
+Open the Herdr app once (so it has made its folder), then run:
 
 ```sh
-# Prebuilt or from source: anything that gives you the herdr-jira binary.
+curl -fsSL https://raw.githubusercontent.com/craicoverflow/herdr-jira/main/scripts/install-app.sh | sh
+```
+
+Press `cmd-j` in Herdr (`ctrl-shift-j` on Linux) to open it.
+
+The script ([`../scripts/install-app.sh`](../scripts/install-app.sh))
+downloads the `herdr-jira` binary for your platform (macOS or Linux, arm64 or
+amd64) from the latest GitHub release. It checks the binary's SHA-256 against
+the release's `checksums.txt` and runs `herdr-jira app install` with it. It
+needs no Go and puts nothing on your `PATH`, and the download is deleted
+afterwards. Running it again updates the mod to the latest release; if you're
+already on the latest, nothing changes.
+
+- **Options** go to `app install` after `sh -s --`. For example,
+  `… | sh -s -- --demo` installs the demo, and `… | sh -s -- --no-key` skips
+  the key binding.
+- **A given release:** `… | HERDR_JIRA_VERSION=v0.5.0 sh`.
+- **Uninstall:** `~/.config/herdr-app/mods/jira/.bin/herdr-jira app uninstall`
+  removes the mod and its key binding.
+
+**From a checkout** instead, build the binary and install with it:
+
+```sh
 sh scripts/build.sh            # in this repo: builds bin/herdr-jira
 ./bin/herdr-jira app install   # copies the mod in and binds cmd-j
 ```
@@ -68,11 +131,13 @@ Reinstall without `--demo` to use your own.
 | `t` | change status |
 | `a` | assign to me |
 | `b` | start work |
+| `m` | comment (`⌘⏎` / `ctrl-⏎` posts, `esc` leaves the draft) |
 | `s` | star or unstar an epic |
 | `c` | copy the key |
 | `o` | open in Jira |
 | `i` | this space's ticket |
-| `1` `2` `tab` | Issues / Epics |
+| `1`-`9` `tab` | switch tabs |
+| `n` | new issue |
 | `r` | refresh |
 | `p` | open as a pane (dialog only) |
 | `?` | all keys, and sign out |
@@ -91,7 +156,7 @@ goes through the helper, `herdr-jira api <op>`, which prints one JSON object
 per call ([`../api.go`](../api.go)). The helper is the same binary the terminal
 plugin uses: the OAuth sign-in against `mcp.atlassian.com` and the MCP calls
 to Jira run there, and the tokens never reach the mod. The lists are cached on
-disk (Issues for 30 minutes, Epics for 3 hours), so the dialog paints at once,
+disk (views for 30 minutes, Epics for 3 hours), so the dialog paints at once,
 and so are the transitions from each workflow step (for a day), so the status
 menu opens at once.
 Each space's branch is matched to a ticket the way the plugin's sidebar label

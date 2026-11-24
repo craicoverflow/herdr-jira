@@ -283,6 +283,7 @@ func recordPatch(p cachePatch) {
 			c.Patches = append(livePatches(c.Patches, p.At), p)
 			_ = writeEpicsCache(c)
 		}
+		patchViewCaches(p, cloudID)
 		return nil
 	})
 }

@@ -43,7 +43,25 @@ refused transition drops the project's lists, and refresh refetches.
 
 ## Current behaviour
 
-### Lanes and queries
+### Views (the app's tabs)
+
+The Herdr app's tabs are `views` in `config.json` (see `app/README.md`,
+"Tabs"). Without `views` the app shows My work only. The terminal popup keeps
+the fixed Issues and Epics tabs below.
+
+| View | Query | Grouping |
+|---|---|---|
+| `my-work` | `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC` (all types, sub-tasks nested under their parent) | status headings: `indeterminate` statuses first, then `new`; one heading per status name |
+| `epics` | the Epics rows below | Assigned to me, Starred |
+| `jql` | the entry's JQL as written | status headings, or none with `group_by: "none"` |
+| `filter` | `filter = <id>` | as `jql` |
+
+Search inside a view runs `(<view JQL without ORDER BY>) AND (summary ~ "q*")`
+(`key ~ "Q*"` for key-shaped text), keeping the view's ORDER BY. Each view is
+cached on its own, keyed by kind and query, for 30 minutes.
+`herdr-jira api view <id|index>` answers one; `api views` lists them.
+
+### Lanes and queries (terminal popup)
 
 Lane queries use `statusCategory != Done`, and `assignee = currentUser()`
 unless noted. They sort by `updated DESC` and are capped at one page of 50; a
@@ -117,15 +135,32 @@ The app runs a mod's programs with a 30-second limit, so `api login` starts a
 detached sign-in worker that records its consent URL and outcome in
 `login.json`, and the mod polls `api session`. Lists use the plugin's caches
 and TTLs (`api issues|epics [--cached|--refresh]`), and
+`api comment KEY` posts a comment through `addCommentToJiraIssue`
+(`commentBody` as markdown, as the tool's format guide asks); the body comes
+from `--json '{"body": "…"}'` or stdin, a blank body is refused, and the reply
+carries the re-read issue so the mod shows Jira's own copy. Demo mode appends
+it to the pretend site only.
 `api transitions KEY --type … --status …` answers from the transitions cache
 (`--refresh` skips it). Changes made through the
-API (`transition`, `assign`, `star`) patch the cached rows in place, keeping
+API (`transition`, `assign`, `star`; `comment` changes only the detail) patch the cached rows in place, keeping
 each cache's fetch time, so the next paint is right without extending the TTL.
 `api tickets --branch …` replaces `tick` for the app: the same candidate-key
 confirmation, with statuses kept in `app_labels.json` so the TUI's `tick`
 (which prunes keys its spaces no longer use) and the app never undo each other.
 Issue details are fetched with `responseContentFormat: markdown`; Jira still
 answers some fields in ADF, which `adf.go` turns into markdown.
+
+Quick create (`n`) uses three ops: `api projects [--ticket KEY] [--cached|--refresh]`
+(projects you may create in, from `getVisibleJiraProjects`, plus the default:
+the ticket's project, else the last project created in, kept in
+`last_project.json`, else the first), `api issuetypes PROJECT` (from
+`getJiraProjectIssueTypesMetadata`, sub-types left out) and `api create
+--project P --type T --summary S [--description D] [--assign-me]`
+(`createJiraIssue`; the description goes as plain text, which the tool reads as
+markdown). Projects and issue types are cached six hours each
+(`projects_cache.json`, `issuetypes_cache.json`). A create puts the new issue
+in the cached lists when it is assigned to the user, and Jira's refusals are
+mapped to plain sentences (`create_failed`).
 
 `api --demo` (or a `demo` file beside the helper, written by
 `app install --demo`) answers from a pretend site in `demo.go`, in a state
@@ -164,8 +199,9 @@ Statements below replace earlier ones in this document's history.
 
 - **Config-based auth-method swap.** Dropped once the MCP-as-standalone-client
   design proved to have no token-cost penalty.
-- **Full issue CRUD (comments, field edits).** This is a status-and-transition
-  tool first; broader editing dilutes the glance-and-act value.
+- **Full issue CRUD (field edits, editing or deleting comments).** This is a
+  status-and-transition tool first, plus adding a comment; broader editing
+  dilutes the glance-and-act value.
 - **Shared public Atlassian OAuth app.** An Atlassian Developer Console
   registration and maintenance commitment that should not block personal use.
 - **Push notifications (webhook relay).** Needs hosting outside the plugin's
@@ -173,7 +209,7 @@ Statements below replace earlier ones in this document's history.
 - **Jira Server / Data Center, multiple sites, multiple accounts.** The
   plugin signs in through the Atlassian MCP server, which is Cloud only.
 - **Starring non-epic issues; Jira's own stars and filters.**
-- **Configurable JQL, lanes, icons or hotkeys.** Added only if someone asks.
+- **Configurable lanes, icons or hotkeys.** Added only if someone asks. (Configurable JQL tabs exist in the Herdr app only: see Views.)
 
 ## Open questions
 

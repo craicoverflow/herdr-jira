@@ -40,8 +40,15 @@ type fakeJiraSource struct {
 	epicChildrenErr    error
 	assignCalls        []string // issue keys passed to assign, in order
 	assignErr          error
+	commentCalls       [][2]string // key, body passed to addComment
+	commentErr         error
 	accountIDResult    string
 	accountIDErr       error
+
+	jqlCalls  []string // JQL passed to runJQL, in order
+	jqlResult []ticketStatus
+	jqlMore   bool
+	jqlErr    error
 }
 
 func (f *fakeJiraSource) accountID(ctx context.Context) (string, error) {
@@ -58,6 +65,11 @@ func (f *fakeJiraSource) myEpics(ctx context.Context) ([]ticketStatus, bool, err
 	return f.myEpicsList, f.myEpicsMore, f.myEpicsErr
 }
 
+func (f *fakeJiraSource) runJQL(ctx context.Context, jql string, max int) ([]ticketStatus, bool, error) {
+	f.jqlCalls = append(f.jqlCalls, jql)
+	return f.jqlResult, f.jqlMore, f.jqlErr
+}
+
 func (f *fakeJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error) {
 	f.epicChildrenCalls = append(f.epicChildrenCalls, epicKey)
 	return f.epicChildrenResult, f.epicChildrenErr
@@ -66,6 +78,11 @@ func (f *fakeJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ti
 func (f *fakeJiraSource) assign(ctx context.Context, key, accountID string) error {
 	f.assignCalls = append(f.assignCalls, key)
 	return f.assignErr
+}
+
+func (f *fakeJiraSource) addComment(ctx context.Context, key, body string) error {
+	f.commentCalls = append(f.commentCalls, [2]string{key, body})
+	return f.commentErr
 }
 
 func (f *fakeJiraSource) myIssues(ctx context.Context) ([]ticketStatus, []ticketStatus, bool, bool, error) {
