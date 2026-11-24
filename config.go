@@ -26,6 +26,9 @@ type config struct {
 	// LabelRefreshSeconds is how old a ticket's cached status may get
 	// before a tick asks Jira about it again.
 	LabelRefreshSeconds int `json:"label_refresh_seconds"`
+	// Views defines the Herdr app's tabs; see views.go. It stays raw so one
+	// bad entry can't spoil the rest of the file.
+	Views json.RawMessage `json:"views,omitempty"`
 }
 
 func withConfigDefaults(cfg config) config {

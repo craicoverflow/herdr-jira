@@ -44,6 +44,11 @@ type fakeJiraSource struct {
 	commentErr         error
 	accountIDResult    string
 	accountIDErr       error
+
+	jqlCalls  []string // JQL passed to runJQL, in order
+	jqlResult []ticketStatus
+	jqlMore   bool
+	jqlErr    error
 }
 
 func (f *fakeJiraSource) accountID(ctx context.Context) (string, error) {
@@ -58,6 +63,11 @@ type scopedCall struct {
 
 func (f *fakeJiraSource) myEpics(ctx context.Context) ([]ticketStatus, bool, error) {
 	return f.myEpicsList, f.myEpicsMore, f.myEpicsErr
+}
+
+func (f *fakeJiraSource) runJQL(ctx context.Context, jql string, max int) ([]ticketStatus, bool, error) {
+	f.jqlCalls = append(f.jqlCalls, jql)
+	return f.jqlResult, f.jqlMore, f.jqlErr
 }
 
 func (f *fakeJiraSource) epicChildren(ctx context.Context, epicKey string) ([]ticketStatus, error) {

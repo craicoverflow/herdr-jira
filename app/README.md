@@ -6,8 +6,10 @@ shares its sign-in, caches and stars, so you can use both.
 
 ![Jira for Herdr](preview.png)
 
-- **Issues and Epics** in headed lanes: your open issues with sub-tasks under
-  their parent, your epics, and the epics you starred.
+- **Tabs you define** (see [Tabs](#tabs)): by default **My work**, everything
+  assigned to you that isn't Done, under status headings (In Progress-type
+  statuses first, then To Do) with counts and sub-tasks under their parent. Add
+  Epics, your own JQL or saved Jira filters.
 - **This space's ticket** at the top. The branch your space is on is matched to
   its Jira issue, and every row shows which spaces are working on it.
 - **A detail pane** with the description and the latest comments rendered as
@@ -29,6 +31,34 @@ shares its sign-in, caches and stars, so you can use both.
 
 **It writes to Jira** when you ask it to: status changes, assigning to you,
 and Start work's follow-ups. Stars stay on your machine.
+
+## Tabs
+
+Tabs come from the optional `views` list in the helper's `config.json`
+(`~/.config/herdr/plugins/config/herdr-jira/config.json`). Without it you get
+just **My work**.
+
+```json
+{
+  "views": [
+    { "builtin": "my-work" },
+    { "builtin": "epics" },
+    { "name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done" },
+    { "name": "Triage", "filter": 10234, "group_by": "none" }
+  ]
+}
+```
+
+- `{"builtin": "my-work"}`: assigned to you, not Done, any type (epics show as
+  ordinary rows), grouped by status, latest update first.
+- `{"builtin": "epics"}`: your epics and the ones you starred. Opt-in.
+- `{"name", "jql"}`: any JQL. `{"name", "filter"}` runs a saved filter as
+  `filter = <id>`.
+- `group_by`: `"status"` (default) or `"none"` (Jira's order, no headings).
+- Each tab shows one page of 50 (`50+`). Search filters the tab at once, then
+  asks Jira within the tab's JQL. Invalid entries are skipped and a note in the
+  app says why; the app never fails over config.
+- Many tabs scroll sideways; `1`-`9` and `tab` switch.
 
 ## Install
 
@@ -99,7 +129,7 @@ Reinstall without `--demo` to use your own.
 | `c` | copy the key |
 | `o` | open in Jira |
 | `i` | this space's ticket |
-| `1` `2` `tab` | Issues / Epics |
+| `1`-`9` `tab` | switch tabs |
 | `r` | refresh |
 | `p` | open as a pane (dialog only) |
 | `?` | all keys, and sign out |
@@ -118,7 +148,7 @@ goes through the helper, `herdr-jira api <op>`, which prints one JSON object
 per call ([`../api.go`](../api.go)). The helper is the same binary the terminal
 plugin uses: the OAuth sign-in against `mcp.atlassian.com` and the MCP calls
 to Jira run there, and the tokens never reach the mod. The lists are cached on
-disk (Issues for 30 minutes, Epics for 3 hours), so the dialog paints at once,
+disk (views for 30 minutes, Epics for 3 hours), so the dialog paints at once,
 and so are the transitions from each workflow step (for a day), so the status
 menu opens at once.
 Each space's branch is matched to a ticket the way the plugin's sidebar label

@@ -1,6 +1,7 @@
 // Jira for Herdr: your Jira Cloud issues and epics beside your terminals.
 //
-// Two tabs (Issues, Epics) of headed lanes, a search that filters as you type
+// Tabs defined by config.json's "views" (My work, Epics, your own JQL or saved
+// filters), each a list under status headings with counts, a search that filters as you type
 // and then asks Jira, and a detail pane: status changes from the issue's live
 // transitions, assign to yourself, Start work (a branch or a worktree space,
 // optionally with an agent on it), star epics. The ticket your space's branch
@@ -14,7 +15,7 @@
 // the width it gets.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, Scrollbar, v_virtual_list, VirtualListScrollHandle, ScrollHandle, TextView } from "gpui-base";
 import { spaces, panes, focused, theme, props, closeOverlay, run, notify, knownAgents, home, nextCommand } from "herdr";
 import { api } from "./api.js";
 import * as M from "./model.js";
@@ -33,27 +34,32 @@ export default class Jira extends View {
     this.handle = cx.focus_handle();
     this.menuHandle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
-    this.tab = this.stored("tab") === "epics" ? "epics" : "issues";
+    this.views = [M.DEFAULT_VIEW]; // the tabs, from the helper's session
+    this.viewNotes = []; // why config.json's entries were skipped
+    this.notesHidden = false;
+    this.tab = this.stored("tab") || M.DEFAULT_VIEW.id; // a view id
+    this.tabScroll = ScrollHandle.new();
+    this.tabShown = null;
 
     this.session = null; // null while checking
     this.setupError = null; // the helper is missing or broken
     this.me = null;
-    this.data = { issues: null, epics: null };
-    this.loading = { issues: false, epics: false };
-    this.errors = { issues: null, epics: null };
+    this.data = {}; // view id -> its reply
+    this.loading = {};
+    this.errors = {};
 
     this.query = "";
     this.typing = false;
-    this.hits = { issues: null, epics: null };
-    this.hitsFor = { issues: null, epics: null };
-    this.searching = { issues: 0, epics: 0 }; // the seq of the search running, or 0
+    this.hits = {};
+    this.hitsFor = {};
+    this.searching = {}; // view id -> the seq of the search running, or 0
     this.searchSeq = 0;
     // Bumped when something makes replies already on their way stale: a sign
-    // in or out ("session"), a local change to a tab's list ("issues",
-    // "epics"), a newer tickets lookup ("tickets").
+    // in or out ("session"), a local change to a view's list (its
+    // id), a newer tickets lookup ("tickets").
     this.gen = new M.Generations();
 
-    this.selected = { issues: null, epics: null }; // row ids
+    this.selected = {}; // view id -> row id
     this.pinned = null; // an issue shown in the detail that isn't a list row
     this.autoPinned = false;
     this.narrowDetail = false;
@@ -131,17 +137,35 @@ export default class Jira extends View {
     cx.spawn(async (cx) => {
       const s = await api("session");
       if (!s.ok) { this.setupError = s.error; cx.notify(); return; }
+      if (s.data.api < 3) {
+        this.setupError = { code: "helper", message: "This herdr-jira helper is too old for the tabs. Run `herdr-jira app install` from a current build." };
+        cx.notify();
+        return;
+      }
       this.setupError = null;
-      this.session = s.data;
+      this.applySession(s.data);
       if (s.data.signedIn) this.loadAll(cx);
       else if (s.data.login?.state === "waiting") this.watchLogin(cx);
       cx.notify();
     });
   }
 
+  // Takes a session reply: the tabs it lists, and the one to show.
+  applySession(data) {
+    this.session = data;
+    if (Array.isArray(data.views) && data.views.length) {
+      this.views = data.views.map((v) => ({ ...v, groupBy: v.groupBy ?? "status" }));
+      this.viewNotes = data.viewNotes ?? [];
+    }
+    if (!this.views.some((v) => v.id === this.tab)) this.tab = this.views[0].id;
+  }
+
+  viewById(id = this.tab) { return this.views.find((v) => v.id === id) ?? this.views[0]; }
+  epicsId() { return this.views.find((v) => v.kind === "epics")?.id ?? null; }
+  epicsData() { const id = this.epicsId(); return id ? this.data[id] ?? null : null; }
+
   loadAll(cx) {
-    this.loadTab("issues", "auto", cx);
-    this.loadTab("epics", "auto", cx);
+    for (const v of this.views) this.loadTab(v.id, "auto", cx);
     this.ticketsKey = null;
     this.resolveTickets(cx);
     if (!this.me) {
@@ -159,16 +183,19 @@ export default class Jira extends View {
   // since it was read before that change; the next tick catches up.
   loadTab(tab, mode, cx) {
     if (this.loading[tab]) return;
+    const view = this.viewById(tab);
     this.loading[tab] = true;
     const session = this.gen.stamp("session");
+    // The epics view is the epics op; every other view is one `view` call.
+    const call = (...flags) => (view.kind === "epics" ? api("epics", ...flags) : api("view", view.id, ...flags));
     cx.spawn(async (cx) => {
       if (!this.data[tab]) {
         const g = this.gen.stamp(tab);
-        const c = await api(tab, "--cached");
+        const c = await call("--cached");
         if (c.ok && c.data.cached && this.gen.same(tab, g) && this.gen.same("session", session)) { this.data[tab] = c.data; cx.notify(); }
       }
       const g = this.gen.stamp(tab);
-      const r = await api(tab, ...(mode === "refresh" ? ["--refresh"] : []));
+      const r = await call(...(mode === "refresh" ? ["--refresh"] : []));
       if (!this.gen.same("session", session)) return; // signing in or out reset loading
       this.loading[tab] = false;
       if (r.ok && !this.gen.same(tab, g)) {
@@ -197,7 +224,7 @@ export default class Jira extends View {
 
   tick(cx) {
     if (!this.session?.signedIn) return;
-    for (const tab of ["issues", "epics"]) this.loadTab(tab, "auto", cx);
+    for (const v of this.views) this.loadTab(v.id, "auto", cx);
     this.ticketsKey = null;
     this.resolveTickets(cx);
   }
@@ -344,11 +371,11 @@ export default class Jira extends View {
           this.session = { ...this.session, login: s.data.login };
         } else {
           stop();
-          this.session = s.data;
+          this.applySession(s.data);
           if (s.data.signedIn && state === "done") {
             this.gen.bump("session");
-            this.loading = { issues: false, epics: false };
-            this.data = { issues: null, epics: null };
+            this.loading = {};
+            this.data = {};
             this.details.clear(); this.transitions.clear();
             this.loadAll(cx);
             this.say(`Signed in to ${this.siteHost()}`, "success", cx);
@@ -367,8 +394,8 @@ export default class Jira extends View {
         this.loginTimer?.cancel();
         this.loginTimer = null;
         this.session = { signedIn: false };
-        this.loading = { issues: false, epics: false };
-        this.data = { issues: null, epics: null };
+        this.loading = {};
+        this.data = {};
         this.details.clear(); this.children.clear(); this.transitions.clear(); this.staleTransitions.clear();
         this.tickets = {}; this.me = null; this.pinned = null; this.sheet = null;
       } else this.say(r.error.message, "error", cx);
@@ -382,7 +409,7 @@ export default class Jira extends View {
     const q = this.query.trim();
     if (this.drill) return M.childRows(this.drill.epic, this.children.get(this.drill.epic.key)?.list ?? [], q);
     const hits = q && this.hitsFor[this.tab] === q ? this.hits[this.tab] : null;
-    return M.buildRows(this.tab, this.data[this.tab], q, hits);
+    return M.buildRows(this.viewById(), this.data[this.tab], q, hits);
   }
 
   selKey() { return this.drill ? `drill:${this.drill.epic.key}` : this.tab; }
@@ -499,6 +526,7 @@ export default class Jira extends View {
   }
 
   setTab(tab, cx) {
+    if (!this.views.some((v) => v.id === tab)) return;
     if (tab === this.tab && !this.drill) return;
     this.drill = null;
     this.tab = tab;
@@ -508,6 +536,12 @@ export default class Jira extends View {
     this.touched = true;
     if (this.query.trim()) this.search(cx);
     this.scroll.scroll_to_item(Math.max(0, this.selIndex(this.rows())));
+  }
+
+  // The view `step` tabs along, wrapping.
+  cycleTab(step, cx) {
+    const v = M.cycleView(this.views, this.tab, step);
+    if (v) this.setTab(v.id, cx);
   }
 
   onQuery(cx) {
@@ -532,7 +566,7 @@ export default class Jira extends View {
       this.searching[tab] = seq;
       cx.notify();
       cx.spawn(async (cx) => {
-        const r = await api("search", "--scope", tab, "--query", q);
+        const r = await api("search", "--view", tab, "--query", q);
         // The spinner is this search's until a newer one on the tab starts,
         // whether or not its answer is still wanted.
         if (this.searching[tab] === seq) this.searching[tab] = 0;
@@ -548,18 +582,23 @@ export default class Jira extends View {
     this.input.set_value("");
     this.query = "";
     this.searchSeq++;
-    this.searching = { issues: 0, epics: 0 };
+    this.searching = {};
   }
 
   // Updates an issue everywhere it is shown after a change in Jira.
   applyIssue(issue) {
-    this.gen.bump("issues");
-    this.gen.bump("epics");
     const patch = (list, dropDone) => (list ?? []).filter((i) => !(dropDone && i.key === issue.key && M.isDone(issue)))
       .map((i) => (i.key === issue.key ? { ...i, ...issue } : i));
-    if (this.data.issues) this.data.issues = { ...this.data.issues, issues: patch(this.data.issues.issues, true), subtasks: patch(this.data.issues.subtasks, true) };
-    if (this.data.epics) this.data.epics = { ...this.data.epics, epics: patch(this.data.epics.epics, true), starred: patch(this.data.epics.starred, false) };
-    for (const tab of ["issues", "epics"]) if (this.hits[tab]) this.hits[tab] = patch(this.hits[tab], true);
+    for (const v of this.views) {
+      this.gen.bump(v.id);
+      const d = this.data[v.id];
+      // Only My work and Epics drop what turns Done; a custom view's query
+      // decides what belongs there, and its next fetch settles it.
+      const drop = v.kind !== "jql";
+      if (d && v.kind === "epics") this.data[v.id] = { ...d, epics: patch(d.epics, true), starred: patch(d.starred, false) };
+      else if (d) this.data[v.id] = { ...d, issues: patch(d.issues, drop), subtasks: patch(d.subtasks, drop) };
+      if (this.hits[v.id]) this.hits[v.id] = patch(this.hits[v.id], drop);
+    }
     for (const [k, c] of this.children) if (c.list) this.children.set(k, { ...c, list: patch(c.list, false) });
     const d = this.details.get(issue.key);
     if (d?.data) this.details.set(issue.key, { ...d, data: { ...d.data, status: issue.status, category: issue.category, updated: issue.updated ?? d.data.updated } });
@@ -705,22 +744,29 @@ export default class Jira extends View {
   }
 
   addMine(issue) {
-    this.gen.bump(issue.level > 0 ? "epics" : "issues");
     const top = (list) => [issue, ...(list ?? []).filter((i) => i.key !== issue.key)];
-    if (issue.level > 0) { if (this.data.epics) this.data.epics = { ...this.data.epics, epics: top(this.data.epics.epics) }; }
-    else if (issue.level < 0) { if (this.data.issues) this.data.issues = { ...this.data.issues, subtasks: top(this.data.issues.subtasks) }; }
-    else if (this.data.issues) this.data.issues = { ...this.data.issues, issues: top(this.data.issues.issues) };
+    for (const v of this.views) {
+      const d = this.data[v.id];
+      if (!d) continue;
+      if (v.kind === "epics" && issue.level > 0) { this.gen.bump(v.id); this.data[v.id] = { ...d, epics: top(d.epics) }; }
+      else if (v.kind === "my-work") {
+        this.gen.bump(v.id);
+        this.data[v.id] = issue.level < 0 ? { ...d, subtasks: top(d.subtasks) } : { ...d, issues: top(d.issues) };
+      }
+    }
   }
 
   star(issue, cx) {
     if (!issue || M.typeKind(issue) !== "epic") return this.say("Only epics can be starred", "info", cx);
-    const e = this.data.epics ?? { epics: [], starred: [], starredKeys: [] };
+    const eid = this.epicsId();
+    if (!eid) return this.say("Add the epics view to your config to star epics", "info", cx);
+    const e = this.data[eid] ?? { epics: [], starred: [], starredKeys: [] };
     const was = (e.starredKeys ?? []).includes(issue.key);
     const apply = (on) => {
-      const keys = (this.data.epics?.starredKeys ?? []).filter((k) => k !== issue.key);
-      const starred = (this.data.epics?.starred ?? []).filter((i) => i.key !== issue.key);
-      this.gen.bump("epics");
-      this.data.epics = { ...(this.data.epics ?? e), starredKeys: on ? [...keys, issue.key] : keys, starred: on ? [...starred, issue] : starred };
+      const keys = (this.data[eid]?.starredKeys ?? []).filter((k) => k !== issue.key);
+      const starred = (this.data[eid]?.starred ?? []).filter((i) => i.key !== issue.key);
+      this.gen.bump(eid);
+      this.data[eid] = { ...(this.data[eid] ?? e), starredKeys: on ? [...keys, issue.key] : keys, starred: on ? [...starred, issue] : starred };
       const d = this.details.get(issue.key);
       if (d?.data) this.details.set(issue.key, { ...d, data: { ...d.data, starred: on } });
     };
@@ -783,8 +829,10 @@ export default class Jira extends View {
       prev: () => this.move(-1, cx),
       open: () => this.open(cx),
       back: () => this.handleKey("escape", cx),
-      issues: () => this.setTab("issues", cx),
-      epics: () => this.setTab("epics", cx),
+      issues: () => this.setTab((this.views.find((v) => v.kind !== "epics") ?? this.views[0]).id, cx),
+      epics: () => { const id = this.epicsId(); if (id) this.setTab(id, cx); },
+      "next-tab": () => this.cycleTab(1, cx),
+      "prev-tab": () => this.cycleTab(-1, cx),
       keys: () => { this.sheet = { kind: "help" }; },
     };
     actions[c]?.();
@@ -928,7 +976,7 @@ export default class Jira extends View {
         return true;
       }
       if (k === "down" || k === "up") { this.move(k === "down" ? 1 : -1, cx); return true; }
-      if (k === "tab") { this.setTab(this.tab === "issues" ? "epics" : "issues", cx); return true; }
+      if (k === "tab") { this.cycleTab(1, cx); return true; }
       return false; // typing
     }
 
@@ -939,9 +987,12 @@ export default class Jira extends View {
       case "up": case "k": this.move(-1, cx); break;
       case "enter": this.open(cx); break;
       case "/": this.input.focus(); break;
-      case "1": this.setTab("issues", cx); break;
-      case "2": this.setTab("epics", cx); break;
-      case "tab": this.setTab(this.tab === "issues" ? "epics" : "issues", cx); break;
+      case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": case "9": {
+        const v = this.views[Number(k) - 1];
+        if (v) this.setTab(v.id, cx);
+        break;
+      }
+      case "tab": this.cycleTab(1, cx); break;
       case "t": this.openMenu(key, cx); break;
       case "a": this.assign(key, cx); break;
       case "b": this.openStart(issue, cx); break;
@@ -1030,7 +1081,7 @@ export default class Jira extends View {
 
   header(t) {
     const signedIn = this.session?.signedIn;
-    const loading = this.loading.issues || this.loading.epics || this.searching.issues || this.searching.epics;
+    const loading = Object.values(this.loading).some(Boolean) || Object.values(this.searching).some(Boolean);
     const fetched = this.data[this.tab]?.fetchedAt;
     return h_flex().flex_none().h(48).px(16).gap(10).items_center().border_b(1).border_color(t.border)
       .child(div().size(26).flex_none().rounded(7).bg("#2684ff").flex().items_center().justify_center()
@@ -1112,6 +1163,7 @@ export default class Jira extends View {
     return v_flex().w(w).flex_none().min_h(0).h_full()
       .when(Boolean(here), (el) => el.child(this.spaceCard(t, here)))
       .child(this.tabsBar(t))
+      .when(this.viewNotes.length > 0 && !this.notesHidden, (el) => el.child(this.viewNotesBar(t)))
       .child(this.searchBox(t))
       .when(Boolean(this.drill), (el) => el.child(this.drillBar(t)))
       .when(Boolean(err), (el) => el.child(h_flex().mx(12).mb(6).px(10).py(7).gap(8).rounded(7).bg(t.blocked + "1a").text_size(12)
@@ -1152,28 +1204,39 @@ export default class Jira extends View {
         .child(statusPill(t, issue.status, issue.category)));
   }
 
+  // One tab per view. A few share the row; more scroll sideways, keeping the
+  // active one in sight.
   tabsBar(t) {
-    const count = (tab) => {
-      const d = this.data[tab];
-      if (!d) return "";
-      if (tab === "issues") return M.countLabel((d.issues?.length ?? 0) + (d.subtasks?.length ?? 0), d.issuesMore || d.subtasksMore);
-      const keys = new Set((d.epics ?? []).map((e) => e.key));
-      const starred = (d.starred ?? []).filter((e) => !M.isDone(e) && !keys.has(e.key) && (d.starredKeys ?? []).includes(e.key));
-      return M.countLabel((d.epics?.length ?? 0) + starred.length, d.more);
-    };
-    const tabEl = (tab, label, n) => {
-      const on = this.tab === tab;
-      return h_flex().id(`jira-tab-${tab}`).flex_1().h(28).gap(6).items_center().justify_center().rounded(6).cursor_pointer()
+    const many = this.views.length > 4;
+    const at = this.views.findIndex((v) => v.id === this.tab);
+    if (many && this.tabShown !== this.tab) { this.tabShown = this.tab; if (at >= 0) this.tabScroll.scroll_to_item(at); }
+    const tabEl = (v, i) => {
+      const on = this.tab === v.id;
+      const n = M.viewCount(v, this.data[v.id]);
+      return h_flex().id(`jira-tab-${v.id}`).h(28).gap(6).items_center().justify_center().rounded(6).cursor_pointer()
         .text_size(12.5).font_medium()
+        .when(many, (e) => e.flex_none().px(10))
+        .when(!many, (e) => e.flex_1().min_w(0).px(4))
         .when(on, (e) => e.bg(t.background).shadow_sm().text_color(t.foreground).border_1().border_color(t.border))
         .when(!on, (e) => e.text_color(t.muted).hover((s) => s.text_color(t.foreground)))
-        .on_click((_e, cx) => { this.setTab(tab, cx); this.handle.focus(); cx.notify(); })
-        .child(label)
-        .when(n !== "", (e) => e.child(div().px(6).h(16).rounded_full().bg(on ? t.raised : t.hover).flex().items_center().text_size(10.5).text_color(t.muted).child(n)));
+        .tooltip(i < 9 ? `${v.name} (${i + 1})` : v.name)
+        .on_click((_e, cx) => { this.setTab(v.id, cx); this.handle.focus(); cx.notify(); })
+        .child(div().min_w(0).max_w(160).truncate().child(v.name))
+        .when(n !== "", (e) => e.child(div().px(6).h(16).flex_none().rounded_full().bg(on ? t.raised : t.hover).flex().items_center().text_size(10.5).text_color(t.muted).child(n)));
     };
-    return h_flex().mx(12).mt(12).p(3).gap(3).rounded(9).bg(t.raised)
-      .child(tabEl("issues", "Issues", count("issues")))
-      .child(tabEl("epics", "Epics", count("epics")));
+    const row = h_flex().id("jira-tabs").mx(12).mt(12).p(3).gap(3).rounded(9).bg(t.raised).min_w(0).children(this.views.map(tabEl));
+    return many ? row.overflow_x_scroll().track_scroll(this.tabScroll) : row;
+  }
+
+  // Why some entries in config.json's "views" were skipped.
+  viewNotesBar(t) {
+    const more = this.viewNotes.length - 1;
+    return h_flex().id("jira-view-notes").mx(12).mt(8).px(10).py(6).gap(8).items_center().rounded(7).bg(t.blocked + "1a").text_size(12).cursor_pointer()
+      .tooltip(this.viewNotes.join("\n"))
+      .on_click((_e, cx) => { this.notesHidden = true; cx.notify(); })
+      .child(icon("alert").size(13).flex_none().text_color(t.blocked))
+      .child(div().flex_1().min_w(0).truncate().child(`${this.viewNotes[0]}${more > 0 ? ` (+${more} more)` : ""}`))
+      .child(icon("x").size(12).flex_none().text_color(t.dim));
   }
 
   searchBox(t) {
@@ -1259,7 +1322,7 @@ export default class Jira extends View {
       .child(h_flex().gap(5).items_center().child(typeTile(shown, 14)).child(div().text_color(t.foreground).font_medium().child(issue.key)));
 
     const tools = h_flex().gap(2).items_center()
-      .when(kind === "epic", (el) => el.child(button(t, "jira-star", { iconName: shown.starred || (this.data.epics?.starredKeys ?? []).includes(issue.key) ? "star-fill" : "star", kind: "ghost", tooltip: "Star (s)", onClick: (_e, cx) => { this.star(shown, cx); cx.notify(); } })))
+      .when(kind === "epic" && Boolean(this.epicsId()), (el) => el.child(button(t, "jira-star", { iconName: shown.starred || (this.epicsData()?.starredKeys ?? []).includes(issue.key) ? "star-fill" : "star", kind: "ghost", tooltip: "Star (s)", onClick: (_e, cx) => { this.star(shown, cx); cx.notify(); } })))
       .child(button(t, "jira-copy", { iconName: "copy", kind: "ghost", tooltip: "Copy key (c)", onClick: (_e, cx) => { this.copyKey(issue.key, cx); cx.notify(); } }))
       .child(button(t, "jira-open", { iconName: "external", kind: "ghost", tooltip: "Open in Jira (o)", onClick: (_e, cx) => this.browse(issue.key, cx) }));
 
@@ -1419,7 +1482,7 @@ export default class Jira extends View {
       ["↑ ↓  j k", "move through the list"], ["⏎", "open (an epic lists its children)"], ["/", "search: filters at once, then asks Jira"],
       ["t", "change status (the issue's transitions, kept for a day; r refreshes)"], ["a", "assign to me"], ["b", "start work: branch or worktree, and an agent"], ["m", "comment (⌘⏎ posts, esc leaves the draft)"],
       ["s", "star or unstar an epic"], ["c", "copy the key"], ["o", "open in Jira"], ["i", "this space's ticket"],
-      ["1  2  tab", "Issues / Epics"], ["r", "refresh"], ["p", "open as a pane (dialog only)"], ["esc", "back, clear, close"],
+      ["1-9  tab", "switch tabs (your views)"], ["r", "refresh"], ["p", "open as a pane (dialog only)"], ["esc", "back, clear, close"],
     ];
     return card
       .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child("Keys")).child(kbd(t, "esc")))

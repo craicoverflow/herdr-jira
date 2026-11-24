@@ -92,6 +92,8 @@ func demoSeed() []demoIssue {
 		{Key: "PLAT-20", Summary: "Kubernetes 1.34 upgrade", Status: "Done", Type: "Epic", Level: 1, Assignee: jo, Reporter: jo, Priority: "High", Created: h(3000), Updated: h(400)},
 		{Key: "WEB-180", Summary: "Mobile web performance", Status: "To Do", Type: "Epic", Level: 1, Assignee: priya, Reporter: priya, Priority: "Medium", Created: h(700), Updated: h(90)},
 		{Key: "WEB-171", Summary: "Search suggestions show deleted products", Status: "To Do", Type: "Bug", Assignee: priya, Reporter: jo, Priority: "High", Created: h(80), Updated: h(40)},
+		{Key: "WEB-165", Summary: "Cart badge count is stale after removing the last item", Status: "In Progress", Type: "Bug", Assignee: priya, Reporter: jo, Priority: "Medium", Created: h(50), Updated: h(5)},
+		{Key: "WEB-168", Summary: "Promo code field accepts trailing spaces", Status: "In Review", Type: "Bug", Assignee: sam, Reporter: priya, Priority: "Low", Created: h(70), Updated: h(14)},
 		{Key: "API-99", Summary: "Document the pagination tokens", Status: "To Do", Type: "Task", Parent: "API-70", Reporter: sam, Priority: "Low", Created: h(60), Updated: h(60)},
 		{Key: "PLAT-31", Summary: "Alert on p99 checkout latency", Status: "In Progress", Type: "Task", Parent: "PLAT-12", Assignee: jo, Reporter: jo, Priority: "Medium", Created: h(100), Updated: h(10)},
 	}
@@ -312,7 +314,19 @@ func enterDemo() {
 	cloudIDFn = func() string { return demoCloudID }
 	ensureCloudIDFn = func(context.Context) (string, error) { return demoCloudID, nil }
 	siteURLFn = func() (string, error) { return demoSiteURL, nil }
+	viewsFn = demoViews
 	if _, err := os.Stat(starStatePath()); os.IsNotExist(err) {
 		_ = writeStars(demoCloudID, []starEntry{{Key: "PLAT-12"}, {Key: "PLAT-20"}})
 	}
+}
+
+// demoViews are the demo site's tabs: My work, two custom queries (one a
+// saved filter) and Epics, so every kind shows.
+func demoViews() ([]viewDef, []string) {
+	return resolveViews(json.RawMessage(`[
+		{"builtin": "my-work"},
+		{"name": "Team bugs", "jql": "project = WEB AND type = Bug AND statusCategory != Done"},
+		{"name": "Platform", "filter": 10234, "group_by": "none"},
+		{"builtin": "epics"}
+	]`))
 }

@@ -25,8 +25,9 @@ import (
 // share one sign-in and one set of caches.
 
 // apiVersion is bumped when an op's shape changes, so a mod can tell an old
-// helper binary from a new one. 2: transitions takes --type and --status.
-const apiVersion = 2
+// helper binary from a new one. 2: transitions takes --type and --status. 3: session and views list the
+// configured tabs; the view op answers one.
+const apiVersion = 3
 
 type apiReply struct {
 	OK    bool      `json:"ok"`
@@ -226,6 +227,8 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 	force := fs.Bool("force", false, "")
 	scope := fs.String("scope", "issues", "")
 	query := fs.String("query", "", "")
+	viewArg := fs.String("view", "", "a view's id or index")
+	viewDefArg := fs.String("def", "", "a view definition as JSON")
 	row := fs.String("row", "", "")
 	jsonArg := fs.String("json", "", `comment: {"body": "markdown"}; without it the body is read from stdin`)
 	issueType := fs.String("type", "", "the issue's type, as last seen")
@@ -267,7 +270,23 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 		return apiIssues(ctx, src, mode)
 	case "epics":
 		return apiEpics(ctx, src, mode)
+	case "views":
+		views, notes := viewsFn()
+		return map[string]any{"views": views, "notes": nonNil(notes)}, nil
+	case "view":
+		v, err := viewArgOf(*viewDefArg, pos)
+		if err != nil {
+			return nil, err
+		}
+		return apiView(ctx, src, v, mode)
 	case "search":
+		if *viewArg != "" || *viewDefArg != "" {
+			v, err := viewArgOf(*viewDefArg, []string{*viewArg})
+			if err != nil {
+				return nil, err
+			}
+			return apiViewSearch(ctx, src, v, *query)
+		}
 		sc := scopeIssues
 		if *scope == "epics" {
 			sc = scopeEpics
@@ -406,6 +425,8 @@ var (
 
 func apiSession() map[string]any {
 	out := map[string]any{"signedIn": false, "version": pluginVersion, "api": apiVersion}
+	views, notes := viewsFn()
+	out["views"], out["viewNotes"] = views, nonNil(notes)
 	if demoMode {
 		out["signedIn"], out["siteURL"], out["cloudId"], out["demo"] = true, demoSiteURL, demoCloudID, true
 		return out
@@ -621,6 +642,77 @@ func apiEpics(ctx context.Context, src apiSource, mode string) (any, error) {
 	}
 	c = storeFetchedEpics(started, epicsCache{FetchedAt: nowFn(), Epics: epics, More: more, Starred: starred, StarredKeys: keys, CloudID: cloudID})
 	return epicsReply(c, true, true), nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// viewArgOf picks the view an op names: a --def JSON definition, else the
+// first positional (or --view) argument as an id or index.
+func viewArgOf(def string, pos []string) (viewDef, error) {
+	if def != "" {
+		return viewFromDef(def)
+	}
+	if len(pos) < 1 || pos[0] == "" {
+		return viewDef{}, usageErr("view needs a view id or index, or --def")
+	}
+	return findView(pos[0])
+}
+
+// apiView answers one tab with the same modes as apiIssues, in the same row
+// shape: issues, and sub-tasks apart from them. The epics view is the epics
+// op, whose shape is its own.
+func apiView(ctx context.Context, src apiSource, v viewDef, mode string) (any, error) {
+	if v.Kind == viewEpics {
+		return apiEpics(ctx, src, mode)
+	}
+	key := viewCacheKey(v)
+	c, hasCache := readViewCache(key)
+	if hasCache && !sameSite(c.CloudID, cloudIDFn()) {
+		c, hasCache = viewCacheEntry{}, false // another site's cache
+	}
+	fresh := hasCache && c.fresh()
+	if mode == "cached" || (mode == "auto" && fresh) {
+		return viewReply(v, c.Rows, c.More, c.FetchedAt, fresh, hasCache), nil
+	}
+	started := nowFn()
+	rows, more, err := src.runJQL(ctx, v.JQL, viewMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", v.Name, err)
+	}
+	rows = storeFetchedView(started, key, v, rows, more)
+	return viewReply(v, rows, more, nowFn(), true, true), nil
+}
+
+func viewReply(v viewDef, rows []ticketStatus, more bool, fetchedAt time.Time, fresh, cached bool) map[string]any {
+	issues, subtasks := splitCached(rows)
+	out := issuesReply(issues, subtasks, more, false, fetchedAt, fresh, cached)
+	out["view"] = v.ID
+	return out
+}
+
+// apiViewSearch asks Jira for the issues in a view that match a query.
+func apiViewSearch(ctx context.Context, src apiSource, v viewDef, query string) (any, error) {
+	query = strings.TrimSpace(query)
+	if v.Kind == viewEpics {
+		hits, err := src.searchScoped(ctx, query, scopeEpics)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"query": query, "view": v.ID, "hits": toAPIIssues(hits)}, nil
+	}
+	if query == "" {
+		return map[string]any{"query": query, "view": v.ID, "hits": []apiIssue{}}, nil
+	}
+	hits, _, err := src.runJQL(ctx, searchViewJQL(v.JQL, query), searchMaxResults)
+	if err != nil {
+		return nil, fmt.Errorf("search %q in %s: %w", query, v.Name, err)
+	}
+	return map[string]any{"query": query, "view": v.ID, "hits": toAPIIssues(hits)}, nil
 }
 
 func epicsReply(c epicsCache, fresh, cached bool) map[string]any {

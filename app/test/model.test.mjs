@@ -8,26 +8,105 @@ import * as M from "../mods/jira/model.js";
 const issue = (key, extra = {}) => ({ key, summary: `Summary of ${key}`, status: "To Do", category: "new", type: "Task", level: 0, ...extra });
 const kinds = (rows) => rows.map((r) => (r.kind === "head" ? `#${r.lane}(${r.count}${r.more ? "+" : ""})` : r.kind === "note" ? `~${r.text}` : `${r.kind}:${r.issue.key}${r.depth ? `@${r.depth}` : ""}`));
 
-test("issues lane nests sub-tasks under their parent and keeps orphans last", () => {
+const MY = { id: "my-work", name: "My work", kind: "my-work", groupBy: "status" };
+const EPICS = { id: "epics", name: "Epics", kind: "epics", groupBy: "status" };
+const BUGS = { id: "view-2", name: "Team bugs", kind: "jql", groupBy: "status" };
+const FLAT = { id: "view-3", name: "Triage", kind: "jql", groupBy: "none" };
+const at = (hours) => new Date(Date.parse("2026-11-23T12:00:00Z") - hours * 3600e3).toISOString().replace("Z", "+0000");
+const prog = (key, hours, extra = {}) => issue(key, { status: "In Progress", category: "indeterminate", updated: at(hours), ...extra });
+const review = (key, hours, extra = {}) => issue(key, { status: "In Review", category: "indeterminate", updated: at(hours), ...extra });
+const todo = (key, hours, extra = {}) => issue(key, { updated: at(hours), ...extra });
+
+test("My work groups by status: in-progress kinds first, then To Do, newest first", () => {
   const data = {
-    issues: [issue("A-1"), issue("A-2")],
-    subtasks: [issue("A-3", { level: -1, parent: "A-1" }), issue("A-4", { level: -1, parent: "B-9" })],
+    issues: [todo("A-1", 1), review("A-2", 5), prog("A-3", 9), prog("A-4", 2), todo("A-5", 7)],
+    subtasks: [],
   };
-  assert.deepEqual(kinds(M.buildRows("issues", data)), [
-    "#Assigned to me(4)", "issue:A-1", "subtask:A-3@1", "issue:A-2", "subtask:A-4",
+  assert.deepEqual(kinds(M.buildRows(MY, data)), [
+    "#In Progress(2)", "issue:A-4", "issue:A-3",
+    "#In Review(1)", "issue:A-2",
+    "#To Do(2)", "issue:A-1", "issue:A-5",
   ]);
 });
 
-test("an empty lane says why; a filtered-out lane disappears", () => {
-  const data = { issues: [], subtasks: [] };
-  assert.deepEqual(kinds(M.buildRows("issues", data)), ["#Assigned to me(0)", `~${M.NOTE_NO_ISSUES}`]);
-  assert.deepEqual(kinds(M.buildRows("issues", { issues: [issue("A-1")], subtasks: [] }, "zzz")), []);
+test("each distinct in-progress status gets its own heading", () => {
+  const data = { issues: [issue("A-1", { status: "Blocked", category: "indeterminate" }), review("A-2", 1), prog("A-3", 1)], subtasks: [] };
+  assert.deepEqual(M.buildRows(MY, data).filter((r) => r.kind === "head").map((r) => r.lane), ["In Progress", "In Review", "Blocked"]);
 });
 
-test("a full page shows 50+ until a filter is typed", () => {
-  const data = { issues: [issue("A-1")], subtasks: [], issuesMore: true };
-  assert.equal(M.buildRows("issues", data)[0].more, true);
-  assert.equal(M.buildRows("issues", data, "A-1")[0].more, false);
+test("sub-tasks nest under their parent, whatever their own status; orphans group by theirs", () => {
+  const data = {
+    issues: [prog("A-1", 3), todo("A-2", 1)],
+    subtasks: [todo("A-3", 1, { level: -1, parent: "A-1" }), review("A-4", 2, { level: -1, parent: "B-9" })],
+  };
+  assert.deepEqual(kinds(M.buildRows(MY, data)), [
+    "#In Progress(2)", "issue:A-1", "subtask:A-3@1",
+    "#In Review(1)", "subtask:A-4",
+    "#To Do(1)", "issue:A-2",
+  ]);
+});
+
+test("assigned epics are ordinary rows in My work", () => {
+  const rows = M.buildRows(MY, { issues: [prog("E-1", 1, { type: "Epic", level: 1 })], subtasks: [] });
+  assert.deepEqual(kinds(rows), ["#In Progress(1)", "issue:E-1"]);
+});
+
+test("a custom view groups the same way; Done sorts last", () => {
+  const data = { issues: [issue("A-1", { status: "Done", category: "done" }), todo("A-2", 1), prog("A-3", 1)], subtasks: [] };
+  assert.deepEqual(M.buildRows(BUGS, data).filter((r) => r.kind === "head").map((r) => r.lane), ["In Progress", "To Do", "Done"]);
+});
+
+test("group_by none lists in Jira's order with no headings", () => {
+  const data = { issues: [todo("A-1", 9), prog("A-2", 1), todo("A-3", 5)], subtasks: [] };
+  assert.deepEqual(kinds(M.buildRows(FLAT, data)), ["issue:A-1", "issue:A-2", "issue:A-3"]);
+});
+
+test("empty views read well", () => {
+  const empty = { issues: [], subtasks: [] };
+  assert.deepEqual(kinds(M.buildRows(MY, empty)), [`~${M.NOTE_NO_ISSUES}`]);
+  assert.deepEqual(kinds(M.buildRows(BUGS, empty)), ["~Nothing matches Team bugs."]);
+  assert.deepEqual(kinds(M.buildRows(FLAT, empty)), ["~Nothing matches Triage."]);
+  assert.deepEqual(kinds(M.buildRows(EPICS, { epics: [], starred: [], starredKeys: [] })).slice(0, 2), ["#Assigned to me(0)", `~${M.NOTE_NO_EPICS}`]);
+  assert.deepEqual(kinds(M.buildRows(MY, null)), []);
+});
+
+test("filtering narrows each view at once, and a view with no match shows nothing", () => {
+  const data = {
+    issues: [prog("A-1", 1, { summary: "cart bug" }), todo("A-2", 1, { summary: "other" }), review("B-3", 1, { summary: "cart again" })],
+    subtasks: [todo("A-4", 1, { level: -1, parent: "A-2", summary: "cart child" })],
+  };
+  for (const view of [MY, BUGS]) {
+    assert.deepEqual(kinds(M.buildRows(view, data, "cart")), [
+      "#In Progress(1)", "issue:A-1", "#In Review(1)", "issue:B-3", "#To Do(1)", "subtask:A-4",
+    ]);
+  }
+  assert.deepEqual(kinds(M.buildRows(FLAT, data, "b-3")), ["issue:B-3"]);
+  assert.deepEqual(kinds(M.buildRows(MY, data, "zzz")), []);
+  assert.deepEqual(kinds(M.buildRows(FLAT, data, "zzz")), []);
+});
+
+test("a full page shows 50+ on every heading until a filter is typed", () => {
+  const data = { issues: [prog("A-1", 1), todo("A-2", 1)], subtasks: [], issuesMore: true };
+  const heads = (rows) => rows.filter((r) => r.kind === "head");
+  assert.deepEqual(heads(M.buildRows(MY, data)).map((r) => r.more), [true, true]);
+  assert.deepEqual(heads(M.buildRows(MY, data, "A-")).map((r) => r.more), [false, false]);
+  assert.match(M.buildRows(FLAT, data).at(-1).text, /first 2/);
+  assert.equal(M.viewCount(MY, data), "2+");
+  assert.equal(M.viewCount(MY, null), "");
+});
+
+test("epics keep their lanes and count", () => {
+  const data = { epics: [issue("E-1", { level: 1 })], starred: [issue("S-1", { level: 1 })], starredKeys: ["S-1"] };
+  assert.equal(M.viewCount(EPICS, data), "2");
+});
+
+test("views cycle with wrap, from an unknown id too", () => {
+  const views = [MY, BUGS, EPICS];
+  assert.equal(M.cycleView(views, "my-work", 1).id, "view-2");
+  assert.equal(M.cycleView(views, "epics", 1).id, "my-work");
+  assert.equal(M.cycleView(views, "my-work", -1).id, "epics");
+  assert.equal(M.cycleView(views, "gone", 1).id, "my-work");
+  assert.equal(M.cycleView([], "x", 1), null);
 });
 
 test("epics: assigned first, then starred; an epic in both shows once; Done stars hide", () => {
@@ -36,7 +115,7 @@ test("epics: assigned first, then starred; an epic in both shows once; Done star
     starred: [issue("E-2", { type: "Epic", level: 1 }), issue("S-1", { type: "Epic", level: 1 }), issue("S-2", { type: "Epic", level: 1, category: "done" })],
     starredKeys: ["E-2", "S-1", "S-2"],
   };
-  const rows = M.buildRows("epics", data);
+  const rows = M.buildRows(EPICS, data);
   assert.deepEqual(kinds(rows), ["#Assigned to me(2)", "epic:E-1", "epic:E-2", "#Starred(1)", "epic:S-1"]);
   assert.equal(rows.find((r) => r.issue?.key === "E-2").starred, true);
   assert.equal(rows.find((r) => r.issue?.key === "E-1").starred, false);
@@ -44,29 +123,31 @@ test("epics: assigned first, then starred; an epic in both shows once; Done star
 
 test("a starred epic no longer in starredKeys (unstarred) is not listed", () => {
   const data = { epics: [], starred: [issue("S-1", { type: "Epic", level: 1 })], starredKeys: [] };
-  assert.deepEqual(kinds(M.buildRows("epics", data)), ["#Assigned to me(0)", `~${M.NOTE_NO_EPICS}`, "#Starred(0)", `~${M.NOTE_NO_STARRED}`]);
+  assert.deepEqual(kinds(M.buildRows(EPICS, data)), ["#Assigned to me(0)", `~${M.NOTE_NO_EPICS}`, "#Starred(0)", `~${M.NOTE_NO_STARRED}`]);
 });
 
 test("search results never repeat a row already shown, and drop Done hits", () => {
   const data = { issues: [issue("A-1")], subtasks: [] };
   const hits = [issue("A-1"), issue("B-2"), issue("B-3", { category: "done" }), issue("B-4", { level: -1 })];
-  assert.deepEqual(kinds(M.buildRows("issues", data, "", hits)), [
-    "#Assigned to me(1)", "issue:A-1", "#Search results(2)", "issue:B-2", "subtask:B-4",
+  assert.deepEqual(kinds(M.buildRows(MY, data, "", hits)), [
+    "#To Do(1)", "issue:A-1", "#Search results(2)", "issue:B-2", "subtask:B-4",
   ]);
+  // A custom view's query decides what belongs, so its Done hits stay.
+  assert.deepEqual(kinds(M.buildRows(BUGS, data, "", hits)).slice(-3), ["issue:B-2", "issue:B-3", "subtask:B-4"]);
 });
 
 test("hits that are all listed already say so, rather than 'no matches'", () => {
-  const rows = M.buildRows("issues", { issues: [issue("A-1")], subtasks: [] }, "A", [issue("A-1")]);
+  const rows = M.buildRows(MY, { issues: [issue("A-1")], subtasks: [] }, "A", [issue("A-1")]);
   assert.deepEqual(kinds(rows).slice(-2), ["#Search results(0)", `~${M.NOTE_NO_MORE}`]);
 });
 
 test("an empty answer still shows its heading", () => {
-  assert.deepEqual(kinds(M.buildRows("issues", { issues: [], subtasks: [] }, "nothing", [])), ["#Search results(0)", `~${M.NOTE_NO_MATCHES}`]);
+  assert.deepEqual(kinds(M.buildRows(MY, { issues: [], subtasks: [] }, "nothing", [])), ["#Search results(0)", `~${M.NOTE_NO_MATCHES}`]);
 });
 
 test("row ids are unique even when an issue is in two lanes", () => {
   const data = { epics: [], starred: [], starredKeys: [] };
-  const rows = M.buildRows("epics", data, "", [issue("E-9", { type: "Epic", level: 1 })]);
+  const rows = M.buildRows(EPICS, data, "", [issue("E-9", { type: "Epic", level: 1 })]);
   const ids = rows.map((r) => r.id);
   assert.equal(new Set(ids).size, ids.length);
 });
@@ -78,7 +159,7 @@ test("children list in-progress first, with a heading that leads back", () => {
 });
 
 test("moveSelection skips headings and notes and wraps", () => {
-  const rows = M.buildRows("issues", { issues: [issue("A-1"), issue("A-2")], subtasks: [] }, "", []);
+  const rows = M.buildRows(MY, { issues: [issue("A-1"), issue("A-2")], subtasks: [] }, "", []);
   const first = M.moveSelection(rows, -1, 1);
   assert.equal(rows[first].issue.key, "A-1");
   const second = M.moveSelection(rows, first, 1);
