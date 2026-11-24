@@ -27,8 +27,9 @@ import (
 // apiVersion is bumped when an op's shape changes, so a mod can tell an old
 // helper binary from a new one. 2: transitions takes --type and --status. 3: session
 // and views list the configured tabs; the view op answers one. 4: projects,
-// issuetypes and create.
-const apiVersion = 4
+// issuetypes and create. 5: first-run setup: sites, site-select, jql-check,
+// setup-save and setup-skip, and session's "setup".
+const apiVersion = 5
 
 type apiReply struct {
 	OK    bool      `json:"ok"`
@@ -125,6 +126,12 @@ type apiSource interface {
 	projects(ctx context.Context) ([]jiraProject, error)
 	issueTypes(ctx context.Context, project string) ([]jiraIssueType, error)
 	createIssue(ctx context.Context, r createRequest, accountID string) (string, error)
+	// sites lists the Jira sites the account reaches (first-run setup).
+	sites(ctx context.Context) ([]accessibleResource, error)
+}
+
+func (s *realJiraSource) sites(ctx context.Context) ([]accessibleResource, error) {
+	return fetchSites(ctx, s.client)
 }
 
 func (s *realJiraSource) userInfo(ctx context.Context) (userInfo, error) {
@@ -377,6 +384,19 @@ func dispatchAPI(ctx context.Context, src apiSource, args []string) (any, error)
 		return apiIssueTypes(ctx, src, pos[0], mode)
 	case "create":
 		return apiCreate(ctx, src, createRequest{Project: *project, IssueType: *issueType, Summary: *summary, Description: *description, AssignToMe: *assignMe})
+	case "sites":
+		return apiSites(ctx, src)
+	case "site-select":
+		if len(pos) < 1 {
+			return nil, usageErr("site-select needs a site id")
+		}
+		return apiSiteSelect(ctx, src, pos[0])
+	case "jql-check":
+		return apiJQLCheck(ctx, src, *query)
+	case "setup-save":
+		return apiSetupSave(*jsonArg)
+	case "setup-skip":
+		return apiSetupSkip()
 	case "tickets":
 		return apiTickets(ctx, src, branches, *force)
 	}
@@ -447,6 +467,7 @@ func apiSession() map[string]any {
 	out := map[string]any{"signedIn": false, "version": pluginVersion, "api": apiVersion}
 	views, notes := viewsFn()
 	out["views"], out["viewNotes"] = views, nonNil(notes)
+	out["setup"] = apiSetupInfo()
 	if demoMode {
 		out["signedIn"], out["siteURL"], out["cloudId"], out["demo"] = true, demoSiteURL, demoCloudID, true
 		return out

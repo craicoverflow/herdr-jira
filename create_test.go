@@ -57,11 +57,23 @@ func TestChooseDefaultProject(t *testing.T) {
 		{"web", "", "WEB"},
 	}
 	for _, c := range cases {
-		if got := chooseDefaultProject(ps, c.ticket, c.last); got != c.want {
+		if got := chooseDefaultProject(ps, c.ticket, c.last, ""); got != c.want {
 			t.Errorf("choose(%q, %q) = %q, want %q", c.ticket, c.last, got, c.want)
 		}
 	}
-	if chooseDefaultProject(nil, "WEB", "API") != "" {
+	// The configured default sits after the ticket and the last used, before the first.
+	for _, c := range []struct{ ticket, last, configured, want string }{
+		{"", "", "WEB", "WEB"},
+		{"", "PLAT", "WEB", "PLAT"},
+		{"API", "PLAT", "WEB", "API"},
+		{"", "", "gone", "API"}, // a default you can no longer create in is skipped
+		{"", "", "web", "WEB"},
+	} {
+		if got := chooseDefaultProject(ps, c.ticket, c.last, c.configured); got != c.want {
+			t.Errorf("choose(%q, %q, %q) = %q, want %q", c.ticket, c.last, c.configured, got, c.want)
+		}
+	}
+	if chooseDefaultProject(nil, "WEB", "API", "PLAT") != "" {
 		t.Error("no projects, no default")
 	}
 }

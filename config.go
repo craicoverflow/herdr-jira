@@ -29,7 +29,14 @@ type config struct {
 	// Views defines the Herdr app's tabs; see views.go. It stays raw so one
 	// bad entry can't spoil the rest of the file.
 	Views json.RawMessage `json:"views,omitempty"`
+	// DefaultProject is the project quick-create starts on when neither the
+	// space's ticket nor a previous create picks one. Set by first-run setup.
+	DefaultProject string `json:"default_project,omitempty"`
 }
+
+// configPathFn is where config.json lives; a seam so the demo site keeps its
+// own copy in its state folder and never touches the real one.
+var configPathFn = func() string { return filepath.Join(configDir(), "config.json") }
 
 func withConfigDefaults(cfg config) config {
 	if cfg.LabelRefreshSeconds <= 0 {
@@ -42,7 +49,7 @@ func withConfigDefaults(cfg config) config {
 // if the file doesn't exist). A malformed file still yields defaults, so
 // tick can keep working quietly while the user fixes it.
 func loadConfig() (config, error) {
-	data, err := os.ReadFile(filepath.Join(configDir(), "config.json"))
+	data, err := os.ReadFile(configPathFn())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return withConfigDefaults(config{}), nil

@@ -317,3 +317,76 @@ test("filterProjects matches key or name", () => {
   assert.deepEqual(M.filterProjects(ps, "api").map((p) => p.key), ["API"]);
   assert.equal(M.filterProjects(ps, "").length, 2);
 });
+
+// ---- first-run setup ------------------------------------------------------------
+
+test("setup shows the site step only for an account with several Jira Cloud sites", () => {
+  assert.deepEqual(M.setupSteps([]), ["project", "tabs"]);
+  assert.deepEqual(M.setupSteps([{ id: "a" }]), ["project", "tabs"]);
+  assert.deepEqual(M.setupSteps([{ id: "a" }, { id: "b" }]), ["site", "project", "tabs"]);
+  // A site that isn't Jira Cloud can't be chosen, so it doesn't make a choice.
+  assert.deepEqual(M.setupSteps([{ id: "a" }, { id: "dc", cloud: false }]), ["project", "tabs"]);
+  assert.ok(M.setupSteps([{ id: "a" }, { id: "b" }]).length <= 3);
+});
+
+test("setup steps move forward and back, and end with null (done)", () => {
+  const steps = ["site", "project", "tabs"];
+  assert.equal(M.stepAfter(steps, "site"), "project");
+  assert.equal(M.stepAfter(steps, "tabs"), null);
+  assert.equal(M.stepAfter(steps, "tabs", -1), "project");
+  assert.equal(M.stepAfter(steps, "site", -1), null);
+  assert.equal(M.stepAfter(["project", "tabs"], "project", -1), null);
+});
+
+test("rankProjects puts exact and prefix key matches first, then names", () => {
+  const ps = [{ key: "WEBX", name: "Other" }, { key: "API", name: "Web services" }, { key: "WEB", name: "Storefront" }, { key: "AWEB", name: "Zed" }];
+  assert.deepEqual(M.rankProjects(ps, "web").map((p) => p.key), ["WEB", "WEBX", "AWEB", "API"]);
+  assert.deepEqual(M.rankProjects(ps, "").map((p) => p.key), ["WEBX", "API", "WEB", "AWEB"]);
+  assert.deepEqual(M.rankProjects(ps, "zzz"), []);
+  assert.deepEqual(M.rankProjects(null, "a"), []);
+});
+
+test("windowAround keeps the highlight in view and counts what is cut", () => {
+  const list = Array.from({ length: 20 }, (_, i) => i);
+  assert.deepEqual(M.windowAround(list, 0, 7), { items: [0, 1, 2, 3, 4, 5, 6], start: 0, before: 0, after: 13 });
+  assert.deepEqual(M.windowAround(list, 10, 7).items, [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(M.windowAround(list, 19, 7), { items: [13, 14, 15, 16, 17, 18, 19], start: 13, before: 13, after: 0 });
+  assert.deepEqual(M.windowAround([1, 2], 1, 7), { items: [1, 2], start: 0, before: 0, after: 0 });
+  assert.equal(M.clampMove(0, -1, 5), 0);
+  assert.equal(M.clampMove(4, 1, 5), 4);
+  assert.equal(M.clampMove(0, 1, 0), 0);
+});
+
+test("validateTab wants a unique name and a query", () => {
+  assert.equal(M.validateTab({ name: "Bugs", jql: "type = Bug" }, [{ name: "My work" }]), "");
+  assert.match(M.validateTab({ name: " ", jql: "x" }), /name/);
+  assert.match(M.validateTab({ name: "Bugs", jql: "  " }), /JQL/);
+  assert.match(M.validateTab({ name: "bugs", jql: "x" }, [{ name: "Bugs" }]), /already/);
+  assert.match(M.validateTab({ name: "x".repeat(31), jql: "x" }), /longer/);
+});
+
+test("setupViews: My work always, Epics as asked, existing tabs keep their order", () => {
+  assert.deepEqual(M.setupViews({ existing: [MY], epics: false, custom: [] }), [{ builtin: "my-work" }]);
+  assert.deepEqual(M.setupViews({ existing: [MY], epics: true, custom: [] }), [{ builtin: "my-work" }, { builtin: "epics" }]);
+  assert.deepEqual(M.setupViews({ existing: [], epics: false, custom: [] }), [{ builtin: "my-work" }]);
+
+  const bugs = { ...BUGS, jql: "type = Bug" };
+  const flat = { ...FLAT, jql: "filter = 10234" };
+  const existing = [MY, bugs, flat, EPICS];
+  // Nothing changed: the same list back, a filter tab as its JQL, group_by kept.
+  assert.deepEqual(M.setupViews({ existing, epics: true, custom: [bugs, flat] }), [
+    { builtin: "my-work" }, { name: "Team bugs", jql: "type = Bug" }, { name: "Triage", jql: "filter = 10234", group_by: "none" }, { builtin: "epics" },
+  ]);
+  // Epics off and one tab removed; a new one goes last.
+  assert.deepEqual(M.setupViews({ existing, epics: false, custom: [flat, { name: " New ", jql: " a = 1 " }] }), [
+    { builtin: "my-work" }, { name: "Triage", jql: "filter = 10234", group_by: "none" }, { name: "New", jql: "a = 1" },
+  ]);
+  // A renamed built-in keeps its name.
+  assert.deepEqual(M.setupViews({ existing: [{ ...MY, name: "Mine" }], epics: false, custom: [] }), [{ builtin: "my-work", name: "Mine" }]);
+});
+
+test("setupPayload carries only the steps that were done", () => {
+  assert.deepEqual(M.setupPayload({ project: null, tabs: null }), {});
+  assert.deepEqual(M.setupPayload({ project: "WEB", tabs: null }), { default_project: "WEB" });
+  assert.deepEqual(M.setupPayload({ project: null, tabs: { existing: [MY], epics: true, custom: [] } }), { views: [{ builtin: "my-work" }, { builtin: "epics" }] });
+});

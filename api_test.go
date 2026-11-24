@@ -29,6 +29,13 @@ type fakeAPISource struct {
 	createdAccount []string
 	createKey      string
 	createErr      error
+
+	siteList []accessibleResource
+	siteErr  error
+}
+
+func (f *fakeAPISource) sites(ctx context.Context) ([]accessibleResource, error) {
+	return f.siteList, f.siteErr
 }
 
 func (f *fakeAPISource) getFull(ctx context.Context, key string) (issueFull, error) {

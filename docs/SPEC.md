@@ -118,9 +118,34 @@ list) is read as the current site's and moved under it on the first write.
 
 ### Sign-in and sites
 
-One Jira Cloud site per account. No site, several sites, a non-Cloud URL, a
-sign-in blocked by organisation policy, and a renamed MCP tool each get a
-distinct message.
+One Jira Cloud site in use per account, kept as `cloud_id`/`site_url` in the
+credentials. An account with one site resolves it by itself; with several, sign-in
+reports `multiple_sites` and first-run setup (below) lists them (`api sites`)
+and stores the choice (`api site-select <id>`) in that same cache. No site, a
+non-Cloud URL, a sign-in blocked by organisation policy, and a renamed MCP tool
+each get a distinct message.
+
+### First-run setup (the app)
+
+Offered after sign-in and from `?` then Set up, while `setup.json` in the state
+folder says it hasn't been done and `config.json` has neither `views` nor
+`default_project`. `session` carries `setup: {needed, defaultProject}`.
+
+| Op | Does |
+|---|---|
+| `sites` | `getAccessibleAtlassianResources`, de-duplicated; flags `cloud` and `current` |
+| `site-select <id>` | stores the site's `cloud_id`/`site_url` (Jira Cloud only) |
+| `projects` | as quick-create; its default is ticket's project, last used, `default_project`, first |
+| `jql-check --query` | runs the JQL once (one page); `invalid_jql` carries Jira's message, auth and network errors keep their codes |
+| `setup-save --json` | validates, merges `default_project` and/or `views` into `config.json`, marks setup done |
+| `setup-skip` | marks setup done, writes nothing |
+
+The merge keeps every other key and its value as written (and the order),
+refuses a file that isn't one JSON object, writes whole beside the file and
+renames over it. `views` is written only if wholly valid, and with My work in
+it. The demo uses `<state>/demo/config.json`. Saved filters: the MCP's tools
+(testdata/stage0/tools_list.json) have none for listing them, and its token
+isn't offered to Jira's REST API, so the tabs step offers a JQL tab instead.
 
 ### Distribution
 
