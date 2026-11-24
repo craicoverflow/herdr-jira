@@ -12,6 +12,11 @@ shares its sign-in, caches and stars, so you can use both.
   its Jira issue, and every row shows which spaces are working on it.
 - **A detail pane** with the description and the latest comments rendered as
   markdown, plus sub-tasks, child issues, parent, assignee, priority and labels.
+- **Add a comment** under the comments: `m` (or the "m comment" pill) focuses a
+  multi-line box; `⌘⏎`/`ctrl-⏎` posts it as markdown, `esc` leaves it. The
+  draft is kept per issue while the mod is open. The comment shows at once,
+  then gives way to Jira's copy; if Jira refuses, the text goes back in the box
+  with the reason.
 - **Change status** from the issue's transitions, as Jira lists them. Nothing
   is hardcoded. Each workflow step's list is kept for a day; `r` refetches.
 - **Start work**: a branch named after the issue, either as a new worktree
@@ -68,6 +73,7 @@ Reinstall without `--demo` to use your own.
 | `t` | change status |
 | `a` | assign to me |
 | `b` | start work |
+| `m` | comment (`⌘⏎` / `ctrl-⏎` posts, `esc` leaves the draft) |
 | `s` | star or unstar an epic |
 | `c` | copy the key |
 | `o` | open in Jira |

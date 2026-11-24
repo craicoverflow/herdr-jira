@@ -181,3 +181,33 @@ test("generations: a stamp goes stale once its name is bumped", () => {
   g.bump("issues");
   assert.equal(g.same("issues", s), false);
 });
+
+test("canPost refuses blank drafts", () => {
+  assert.equal(M.canPost(""), false);
+  assert.equal(M.canPost("  \n "), false);
+  assert.equal(M.canPost(undefined), false);
+  assert.equal(M.canPost(" hi "), true);
+});
+
+test("mergeComments shows pending comments until Jira returns them", () => {
+  const server = [{ author: "A", created: "t1", body: "first" }];
+  const pending = [{ id: 1, author: "Me", created: "t2", body: "mine\n" }];
+  assert.deepEqual(M.mergeComments(server, pending).map((c) => [c.body.trim(), Boolean(c.pending)]), [["first", false], ["mine", true]]);
+  const later = [...server, { author: "Me", created: "t3", body: "mine" }];
+  assert.deepEqual(M.mergeComments(later, pending).map((c) => [c.body, Boolean(c.pending)]), [["first", false], ["mine", false]]);
+  assert.deepEqual(M.stillPending(later, pending), []);
+  assert.equal(M.stillPending(server, pending).length, 1);
+  const posted = [{ ...pending[0], postedAt: 100 }];
+  assert.equal(M.stillPending(server, posted, 99).length, 1, "read began before the post");
+  assert.equal(M.stillPending(server, posted, 100).length, 0, "reworded by Jira: the fresh read wins");
+  assert.equal(M.stillPending(server, pending, 1e12).length, 1, "still sending");
+  assert.deepEqual(M.mergeComments(null, null), []);
+});
+
+test("commentError says what happened in plain words", () => {
+  assert.match(M.commentError({ code: "signed_out" }), /signed out/i);
+  assert.match(M.commentError({ code: "network", message: "dial tcp" }), /reach Jira/);
+  assert.match(M.commentError({ code: "x", message: "comment on A-1: 403" }), /403/);
+  assert.match(M.commentError({}), /try again/);
+  assert.match(M.commentError({}), /kept/);
+});

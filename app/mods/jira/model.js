@@ -295,3 +295,39 @@ export function spacesByTicket(spaces, panes, tickets) {
   }
   return out;
 }
+
+// ---- comments ---------------------------------------------------------------
+
+const same = (a, b) => String(a ?? "").trim() === String(b ?? "").trim();
+
+// Whether a draft is worth posting: Jira refuses an empty comment.
+export const canPost = (text) => String(text ?? "").trim().length > 0;
+
+// The comments to show: Jira's (oldest first) then the ones posted here that
+// the issue hasn't returned yet (`pending`: { id, author, body, created }).
+// A pending comment counts as returned once Jira has a comment with the same
+// text, which is how an optimistic comment gives way to the real one.
+export function mergeComments(server, pending) {
+  const have = server ?? [];
+  const rest = (pending ?? []).filter((p) => !have.some((c) => same(c.body, p.body)));
+  return [...have, ...rest.map((p) => ({ author: p.author, created: p.created, body: p.body, pending: true }))];
+}
+
+// The pending comments still worth showing after an issue read at
+// `fetchedAt`: not returned yet, and not already posted when that read began
+// (Jira may reword a body, so a posted comment can't be matched by text
+// forever). A comment still being sent (no postedAt) always stays.
+export function stillPending(server, pending, fetchedAt = 0) {
+  const have = server ?? [];
+  return (pending ?? []).filter((p) => !have.some((c) => same(c.body, p.body)) && !(p.postedAt && p.postedAt <= fetchedAt));
+}
+
+// Plain words for a failed post. The helper's own message is kept (it names
+// what Jira said); sign-in and network trouble get a line that says what to do.
+export function commentError(error) {
+  const code = error?.code, msg = String(error?.message ?? "").trim();
+  if (code === "signed_out") return "You're signed out of Jira. Sign in again; your comment is kept.";
+  if (code === "network") return "Couldn't reach Jira. Your comment is kept: try again.";
+  if (code === "no_helper" || code === "helper") return msg || "The Jira helper didn't answer. Your comment is kept.";
+  return msg ? `Jira didn't take the comment: ${msg}` : "Jira didn't take the comment. Your comment is kept: try again.";
+}
