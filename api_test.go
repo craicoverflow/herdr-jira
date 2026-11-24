@@ -18,6 +18,17 @@ type fakeAPISource struct {
 	fullErr  error
 	user     userInfo
 	fullKeys []string
+
+	projectList    []jiraProject
+	projectErr     error
+	projectCalls   int
+	typeList       []jiraIssueType
+	typeErr        error
+	typeCalls      int
+	created        []createRequest
+	createdAccount []string
+	createKey      string
+	createErr      error
 }
 
 func (f *fakeAPISource) getFull(ctx context.Context, key string) (issueFull, error) {
@@ -39,6 +50,22 @@ func writePickerCache(issues, subtasks []ticketStatus) error {
 func readPickerCache() []ticketStatus {
 	c, _ := readIssuesCache()
 	return c.Rows
+}
+
+func (f *fakeAPISource) projects(ctx context.Context) ([]jiraProject, error) {
+	f.projectCalls++
+	return f.projectList, f.projectErr
+}
+
+func (f *fakeAPISource) issueTypes(ctx context.Context, project string) ([]jiraIssueType, error) {
+	f.typeCalls++
+	return f.typeList, f.typeErr
+}
+
+func (f *fakeAPISource) createIssue(ctx context.Context, r createRequest, accountID string) (string, error) {
+	f.created = append(f.created, r)
+	f.createdAccount = append(f.createdAccount, accountID)
+	return f.createKey, f.createErr
 }
 
 func (f *fakeAPISource) userInfo(ctx context.Context) (userInfo, error) { return f.user, nil }
