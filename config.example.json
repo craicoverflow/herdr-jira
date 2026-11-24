@@ -1,5 +1,6 @@
 {
   "label_refresh_seconds": 60,
+  "default_project": "WEB",
   "views": [
     { "builtin": "my-work" },
     { "builtin": "epics" },
