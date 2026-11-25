@@ -39,6 +39,41 @@ shares its sign-in, caches and stars, so you can use both.
 **It writes to Jira** when you ask it to: creating an issue, status changes,
 assigning to you, and Start work's follow-ups. Stars stay on your machine.
 
+## A tour
+
+These screenshots are from the demo (`herdr-jira app install --demo`), a pretend
+Jira site, so you can try every one of them without an account.
+
+**Change status** (`t`): the issue's transitions, as Jira lists them.
+
+![The status menu on WEB-142, offering To Do, In Review and Done](screenshots/status.png)
+
+**Start work** (`b`): a branch named after the issue, as a new worktree space or
+checked out where you are, with the optional follow-ups and an agent to start.
+
+![The Start work dialog: branch name, new worktree or switch branch, assign, move to In Progress, and which agent to start](screenshots/start.png)
+
+**Quick create** (`n`): project, issue type, summary, and an optional
+description.
+
+![The New issue form with project, issue type, summary, description and Assign to me](screenshots/create.png)
+
+**Search** (`/`): filters the tab at once, then asks Jira for anything else.
+
+![Searching My work for "address", with matching issues and a Search results lane](screenshots/search.png)
+
+**Epics** (opt-in tab): `enter` on an epic lists its children.
+
+![The Epics tab showing the children of WEB-100 Checkout redesign](screenshots/epic-children.png)
+
+**First run setup**: pick a default project, then your tabs.
+
+![The setup's Default project step, with a project search and list](screenshots/setup.png)
+
+**All keys** (`?`), with **Set up** and sign out.
+
+![The keys sheet listing every shortcut](screenshots/keys.png)
+
 ## Tabs
 
 Tabs come from the optional `views` list in the helper's `config.json`

@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/craicoverflow/herdr-jira/main/scrip
 ```
 
 See [`app/README.md`](app/README.md) for what it does, other ways to install,
-and how to use it.
+and how to use it, with [screenshots of each feature](app/README.md#a-tour).
 
 ![Jira in the Herdr app](app/preview.png)
 
