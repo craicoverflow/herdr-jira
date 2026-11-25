@@ -1,7 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -208,5 +212,72 @@ func TestDemoCreate(t *testing.T) {
 	}
 	if _, err := d.createIssue(ctx, createRequest{Project: "NOPE", IssueType: "Task", Summary: "x"}, ""); err == nil {
 		t.Error("unknown project should fail")
+	}
+}
+
+// getVisibleJiraProjects rejects maxResults > 50, so projects pages in 50s.
+func TestRealJiraSourceProjectsPagesWithinMaxResultsLimit(t *testing.T) {
+	withSignedInCredentials(t)
+	var starts, maxes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params struct {
+				Arguments struct {
+					StartAt    int `json:"startAt"`
+					MaxResults int `json:"maxResults"`
+				} `json:"arguments"`
+			} `json:"params"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if req.Method == "initialize" {
+			fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+			return
+		}
+		a := req.Params.Arguments
+		starts, maxes = append(starts, a.StartAt), append(maxes, a.MaxResults)
+		var vals []string
+		for i := a.StartAt; i < 70 && i < a.StartAt+a.MaxResults; i++ {
+			vals = append(vals, fmt.Sprintf(`{"id":"%d","key":"P%d","name":"Project %d"}`, i, i, i))
+		}
+		fmt.Fprint(w, sseToolResult(`{"values":[`+strings.Join(vals, ",")+`]}`))
+	}))
+	defer srv.Close()
+	orig := mcpEndpoint
+	mcpEndpoint = srv.URL
+	defer func() { mcpEndpoint = orig }()
+
+	list, err := (&realJiraSource{client: srv.Client()}).projects(t.Context())
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if len(list) != 70 {
+		t.Fatalf("got %d projects, want 70", len(list))
+	}
+	if fmt.Sprint(starts) != "[0 50]" || fmt.Sprint(maxes) != "[50 50]" {
+		t.Fatalf("startAt %v maxResults %v, want [0 50] [50 50]", starts, maxes)
+	}
+}
+
+// A server that ignores startAt returns the same page again; stop rather than loop.
+func TestRealJiraSourceProjectsStopsWhenStartAtIgnored(t *testing.T) {
+	withSignedInCredentials(t)
+	var vals []string
+	for i := 0; i < 50; i++ {
+		vals = append(vals, fmt.Sprintf(`{"id":"%d","key":"P%d","name":"Project %d"}`, i, i, i))
+	}
+	srv := newFakeMCPServer(t, map[string]string{"getVisibleJiraProjects": `[` + strings.Join(vals, ",") + `]`})
+	defer srv.Close()
+	orig := mcpEndpoint
+	mcpEndpoint = srv.URL
+	defer func() { mcpEndpoint = orig }()
+	list, err := (&realJiraSource{client: srv.Client()}).projects(t.Context())
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if len(list) != 50 {
+		t.Fatalf("got %d projects, want 50", len(list))
 	}
 }
