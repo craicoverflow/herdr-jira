@@ -349,20 +349,45 @@ func firstText(tr toolResult) string {
 	return ""
 }
 
+// getVisibleJiraProjects refuses maxResults above 50, so the project list is
+// fetched in pages of that size, up to projectsMaxPages pages.
+const (
+	projectsPageSize = 50
+	projectsMaxPages = 20
+)
+
 func (s *realJiraSource) projects(ctx context.Context) ([]jiraProject, error) {
 	cloudID, err := ensureCloudID(ctx, s.client)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := callTool(ctx, s.client, "getVisibleJiraProjects", map[string]any{
-		"cloudId": cloudID, "action": "create", "maxResults": 100,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
-	}
 	var list []jiraProject
-	if err := decodeList(raw, &list, "values", "projects"); err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
+	seen := map[string]bool{}
+	for page := 0; page < projectsMaxPages; page++ {
+		raw, err := callTool(ctx, s.client, "getVisibleJiraProjects", map[string]any{
+			"cloudId": cloudID, "action": "create",
+			"startAt": page * projectsPageSize, "maxResults": projectsPageSize,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list projects: %w", err)
+		}
+		var batch []jiraProject
+		if err := decodeList(raw, &batch, "values", "projects"); err != nil {
+			return nil, fmt.Errorf("list projects: %w", err)
+		}
+		added := 0
+		for _, p := range batch {
+			if !seen[p.Key] {
+				seen[p.Key] = true
+				list = append(list, p)
+				added++
+			}
+		}
+		// A short page is the last one. A page with nothing new means the
+		// server ignored startAt, so asking again would loop.
+		if len(batch) < projectsPageSize || added == 0 {
+			break
+		}
 	}
 	return list, nil
 }

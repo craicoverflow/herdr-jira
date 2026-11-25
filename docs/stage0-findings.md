@@ -105,7 +105,9 @@ sends and expects, written from Atlassian's published tool docs and **not yet
 confirmed against a live site** (no sign-in in this session):
 
 - `getVisibleJiraProjects {cloudId, action: "create", maxResults}` returns the
-  projects with create permission. The reply is read as either a bare array or
+  projects with create permission. Confirmed on a live site: `maxResults`
+  above 50 is refused (`Number must be less than or equal to 50`), so the
+  helper pages with `startAt` in 50s. The reply is read as either a bare array or
   `{values: [...]}` / `{projects: [...]}` of `{id, key, name}`.
 - `getJiraProjectIssueTypesMetadata {cloudId, projectIdOrKey}`: read as
   `{issueTypes: [...]}` or `{values: [...]}` of `{id, name, subtask,
